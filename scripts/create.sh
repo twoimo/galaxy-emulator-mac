@@ -65,6 +65,11 @@ if [ -f "$CONFIG_FILE" ]; then
   grep -v -E "(hw.lcd.width|hw.lcd.height|hw.lcd.density|hw.ramSize|vm.heapSize|hw.cpu.ncore|hw.gpu.enabled|hw.gpu.mode|hw.keyboard|hw.mainKeys|fastboot.forceFastBoot|hw.arc|hw.camera.back)" \
     "$CONFIG_FILE" > "$CONFIG_FILE.tmp" || true
 
+  # Optional slim profile keys (camera/audio are pure overhead for agent use)
+  CAM_BACK=$(node -e "console.log(require('$PROFILE_FILE').cameraBack || 'webcam0')" 2>/dev/null || echo webcam0)
+  CAM_FRONT=$(node -e "console.log(require('$PROFILE_FILE').cameraFront || 'webcam0')" 2>/dev/null || echo webcam0)
+  AUD_IN=$(node -e "console.log(require('$PROFILE_FILE').audioInput || 'yes')" 2>/dev/null || echo yes)
+
   cat <<EOF >> "$CONFIG_FILE.tmp"
 hw.lcd.width = $WIDTH
 hw.lcd.height = $HEIGHT
@@ -76,7 +81,9 @@ hw.gpu.enabled = yes
 hw.gpu.mode = host
 hw.keyboard = yes
 hw.mainKeys = no
-hw.camera.back = webcam0
+hw.camera.back = $CAM_BACK
+hw.camera.front = $CAM_FRONT
+hw.audioInput = $AUD_IN
 fastboot.forceFastBoot = yes
 tag.display = $DISPLAY_NAME
 EOF

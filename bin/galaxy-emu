@@ -157,8 +157,12 @@ function diagnoseDevice(serial) {
 
   // 3. foreground window classification
   const focus = ((sh(serial, "shell dumpsys window | grep mCurrentFocus").match(/mCurrentFocus=Window\{[^}]*?(\S+)\/(\S+)\}/) || []).slice(1).join('/')) || '';
-  if (/AppErrorDialog|ApplicationError|AnrDialog|AppNotResponding/i.test(windowDump)) {
-    add('crash_or_anr_dialog', 'error', 'An app crash or ANR dialog is on screen', 'galaxy-emu diagnose --fix');
+  // Real window titles on Android 14: "Application Error: <pkg>" and "Application Not Responding: <pkg>"
+  const dialogMatch = windowDump.match(/Window\{[^}]*?\b(Application\s*Error|Application\s*Not\s*Responding|AppErrorDialog|AnrDialog|AppNotResponding)\b[^}]*\}/i)
+    || focus.match(/(Application\s*Error|Application\s*Not\s*Responding)/i);
+  if (dialogMatch) {
+    const kind = /Not\s*Responding|ANR/i.test(dialogMatch[0]) ? 'ANR' : 'crash';
+    add('crash_or_anr_dialog', 'error', `${kind} dialog is blocking the screen (${dialogMatch[0].slice(0, 80)})`, 'galaxy-emu diagnose --fix');
   }
   if (/permissioncontroller.*GrantPermissionsActivity/i.test(focus)) {
     add('permission_dialog', 'warn', 'A runtime permission dialog is blocking the app', 'decide per policy, then galaxy-emu tap "<Allow>"');
@@ -197,7 +201,7 @@ function fixIssues(serial, issues) {
       done.push('woke the screen');
     } else if (issue.id === 'crash_or_anr_dialog') {
       const elements = fetchUiHierarchy(serial);
-      const targets = ['Close app', '닫기', '확인', 'Wait', '대기', 'OK'];
+      const targets = ['Close app', 'Wait', 'App info', '닫기', '확인', '대기', '종료', '앱 닫기', 'OK'];
       let tapped = null;
       for (const t of targets) {
         const hit = elements.find(e => {

@@ -100,3 +100,51 @@ Commands:
 ## 📄 License
 
 MIT License. Created by [twoimo (Yeonwoo Choi)](https://github.com/twoimo).
+
+
+---
+
+## Performance tuning (measured)
+
+Applied after checking [kdbhalala/avdslim](https://github.com/kdbhalala/avdslim) recommendations.
+Their headline claim (8.5 GB -> 2.5 GB) mostly targets setups where `hw.gpu.mode=auto` falls back to
+Mesa software rasterization; this profile already pins `hw.gpu.mode=host`, so most of that win was
+already banked.
+
+| Change | Why |
+|---|---|
+| `hw.camera.back/front = none` | webcam capture threads are pure overhead for agent work |
+| `hw.audioInput = no` | mic input unused; audio output stays for video |
+| `hw.ramSize 8192 -> 4096` | 3.8 GB is enough for Instagram + Chrome, 1.7 GB still free |
+| `hw.cpu.ncore 6 -> 8` | host has 18 cores |
+| launch flags `-no-boot-anim -netdelay none -netspeed full` | faster, more realistic boot |
+
+Measured on Apple M5 Max (`Galaxy_S24_Ultra`, Android 14, 1440x3120 @505dpi):
+
+| Metric | Before | After |
+|---|---|---|
+| Cold boot to `sys.boot_completed=1` | 20 s | **16 s** |
+| Guest RAM (`MemTotal`) | 8.0 GB | 3.8 GB |
+| Host RSS, idle just after boot | 6.4 GB | 6.4 GB (unchanged) |
+| Host RSS, Instagram + Chrome loaded | up to 10.6 GB | 6.8 GB |
+| OOM / lmkd kills with both apps | - | none |
+
+Host RSS at idle did not drop: with host GPU already enabled, the footprint is dominated by the
+guest image and Metal buffers, not by a software rasterizer. Reducing guest RAM mainly lowers guest
+memory pressure and GC churn.
+
+Restore the previous AVD config with:
+
+```bash
+cp ~/.android/avd/Galaxy_S24_Ultra.avd/config.ini.bak.<timestamp> \
+   ~/.android/avd/Galaxy_S24_Ultra.avd/config.ini
+```
+
+### Not adopted
+
+- `-lowram` / 1536 MB guest RAM: too tight for Instagram-class apps; avdslim itself recommends it for CI.
+- Third-party emulator builds (`NKS1608/kiln-android-emulator`, `Ccccccccvvm/qemu-android-arm64`): hobby
+  rewrites of QEMU/HVF. Using them would break Play Store, Play Integrity and this toolchain's assumptions.
+- `741g/android-emulator-m1-preview`: deprecated by its own README in favour of Google's official emulator.
+- Docker solutions (`budtmo/docker-android` 16k★, `HQarroum/docker-android` 7.3k★, `Shmayro/dockerify-android`):
+  Linux-host only; they need a Linux VM on macOS, which adds a layer instead of removing one.
