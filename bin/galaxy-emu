@@ -130,6 +130,149 @@ function ensureDeviceReady(serial, attempts = 2) {
   return state;
 }
 
+// ---------- Failure detection ----------
+function sh(serial, cmd) {
+  try { return adbExec(serial, cmd); } catch { return ''; }
+}
+
+function diagnoseDevice(serial) {
+  const issues = [];
+  const add = (id, severity, detail, fix) => issues.push({ id, severity, detail, fix: fix || null });
+
+  // 1. transport
+  const state = deviceState(serial);
+  if (state !== 'device') {
+    add('transport', 'fatal', `ADB state is "${state}"`, 'adb reconnect offline, then adb kill-server && adb start-server');
+    return { serial, issues };
+  }
+
+  // 2. screen / lock
+  const power = sh(serial, 'shell dumpsys power');
+  const wake = (power.match(/mWakefulness=(\w+)/) || [])[1] || 'unknown';
+  if (wake !== 'Awake') add('screen_off', 'warn', `Screen is ${wake}`, 'galaxy-emu key WAKEUP');
+  const windowDump = sh(serial, 'shell dumpsys window');
+  if (/isKeyguardShowing=true|mDreamingLockscreen=true|KeyguardShowing=true/.test(windowDump)) {
+    add('locked', 'error', 'Keyguard is showing (device locked)', 'unlock manually — PIN/biometric cannot be automated');
+  }
+
+  // 3. foreground window classification
+  const focus = ((sh(serial, "shell dumpsys window | grep mCurrentFocus").match(/mCurrentFocus=Window\{[^}]*?(\S+)\/(\S+)\}/) || []).slice(1).join('/')) || '';
+  if (/AppErrorDialog|ApplicationError|AnrDialog|AppNotResponding/i.test(windowDump)) {
+    add('crash_or_anr_dialog', 'error', 'An app crash or ANR dialog is on screen', 'galaxy-emu diagnose --fix');
+  }
+  if (/permissioncontroller.*GrantPermissionsActivity/i.test(focus)) {
+    add('permission_dialog', 'warn', 'A runtime permission dialog is blocking the app', 'decide per policy, then galaxy-emu tap "<Allow>"');
+  }
+  if (/com\.android\.systemui.*(SystemUI|StatusBar)/i.test(focus) && !focus) {
+    add('systemui', 'warn', 'System UI is in the foreground', null);
+  }
+
+  // 4. recent fatal logs
+  const logs = sh(serial, 'shell logcat -d -t 600');
+  if (/FATAL EXCEPTION/.test(logs)) {
+    const m = logs.split('\n').filter(l => /FATAL EXCEPTION|Process:/.test(l)).slice(-2).join(' | ');
+    add('app_crash', 'error', `Recent crash in logcat: ${m.slice(0, 160)}`, 'relaunch the app; report to the user');
+  }
+  if (/\bANR in\b/.test(logs)) {
+    add('app_anr', 'error', 'Recent ANR in logcat', 'wait or force-stop the package');
+  }
+
+  // 5. keyboard overlay
+  const ime = sh(serial, 'shell dumpsys input_method');
+  if (/mInputShown=true/.test(ime)) add('keyboard_shown', 'info', 'Soft keyboard is visible (it can cover targets)', 'galaxy-emu key BACK to hide');
+
+  // 6. storage
+  const df = sh(serial, 'shell df /data');
+  const m = df.match(/(\d+)%\s+\/data/);
+  if (m && parseInt(m[1], 10) >= 90) add('storage_low', 'error', `Data partition ${m[1]}% full`, 'clear app data or use a larger AVD partition');
+
+  return { serial, focus, wakefulness: wake, issues };
+}
+
+function fixIssues(serial, issues) {
+  const done = [];
+  for (const issue of issues) {
+    if (issue.id === 'screen_off') {
+      adbExec(serial, 'shell input keyevent 224'); // WAKEUP
+      done.push('woke the screen');
+    } else if (issue.id === 'crash_or_anr_dialog') {
+      const elements = fetchUiHierarchy(serial);
+      const targets = ['Close app', '닫기', '확인', 'Wait', '대기', 'OK'];
+      let tapped = null;
+      for (const t of targets) {
+        const hit = elements.find(e => {
+          const label = `${e.text || ''} ${e.desc || ''}`;
+          return label.toLowerCase().includes(t.toLowerCase());
+        });
+        if (hit) { tapped = hit; break; }
+      }
+      if (tapped) {
+        adbExec(serial, `shell input tap ${tapped.center[0]} ${tapped.center[1]}`);
+        done.push(`dismissed crash/ANR dialog via "${tapped.text || tapped.desc}"`);
+      } else {
+        done.push('crash/ANR dialog found but no dismiss button matched (inspect with uidump)');
+      }
+    } else if (issue.id === 'keyboard_shown') {
+      adbExec(serial, 'shell input keyevent 4'); // BACK
+      done.push('hid the soft keyboard');
+    }
+  }
+  return done;
+}
+
+// ---------- Trace (record / replay) ----------
+const CFG_DIR = path.join(process.env.HOME, '.galaxy-control');
+const TRACE_DIR = path.join(CFG_DIR, 'traces');
+const ACTIVE_TRACE = path.join(CFG_DIR, 'active-trace');
+const MEMORY_FILE = path.join(CFG_DIR, 'memory.json');
+
+function ensureCfg() {
+  try { fs.mkdirSync(TRACE_DIR, { recursive: true }); } catch {}
+}
+
+function activeTraceName() {
+  try { return fs.readFileSync(ACTIVE_TRACE, 'utf8').trim() || null; } catch { return null; }
+}
+
+function tracePath(name) { return path.join(TRACE_DIR, `${name}.json`); }
+
+function loadTrace(name) {
+  try { return JSON.parse(fs.readFileSync(tracePath(name), 'utf8')); } catch { return null; }
+}
+
+function saveTrace(t) {
+  ensureCfg();
+  fs.writeFileSync(tracePath(t.name), JSON.stringify(t, null, 2), 'utf8');
+}
+
+function maybeRecord(serial, action, args, elementLabel) {
+  const name = activeTraceName();
+  if (!name) return;
+  const t = loadTrace(name) || { name, created: new Date().toISOString(), device: serial, steps: [] };
+  let focus = '';
+  let hash = '';
+  try {
+    focus = (adbExec(serial, "shell dumpsys window | grep mCurrentFocus")
+      .match(/mCurrentFocus=Window\{[^}]*?(\S+\/\S+)\}/) || [])[1] || '';
+    hash = computeStateHash(fetchUiHierarchy(serial));
+  } catch {}
+  t.steps.push({ n: t.steps.length + 1, action, args, elementLabel: elementLabel || null, focus, hash, at: new Date().toISOString() });
+  saveTrace(t);
+}
+
+function loadMemory() {
+  try { return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8')); } catch { return {}; }
+}
+function saveMemory(mem) {
+  ensureCfg();
+  fs.writeFileSync(MEMORY_FILE, JSON.stringify(mem, null, 2), 'utf8');
+}
+
+// ---------- Transient UI (toast / snackbar) ----------
+function md5File(p) {
+  try { return crypto.createHash('md5').update(fs.readFileSync(p)).digest('hex'); } catch { return null; }
+}
+
 // ---------- Prompt-injection defense ----------
 // UI text, notifications and web content are UNTRUSTED DATA. They must never be
 // treated as instructions by the calling model.
@@ -289,6 +432,16 @@ Smart Actions (Zero Coordinate Guessing):
   swipe <x1> <y1> <x2> <y2> [ms]  Swipe/scroll between coordinates
   key <NAME>                      Send keyevent: HOME, BACK, POWER, ENTER, APP_SWITCH, VOL_UP
 
+Reliability & Recovery:
+  diagnose [--fix] [--json]       Detect crash/ANR dialog, lock, screen-off, permission prompt, low storage
+  toast [--watch <sec>] [--json]  Capture transient UI (toast/snackbar) by frame-diff + OCR
+
+Learning & Replay:
+  trace start <name>              Begin recording actions with resulting screen hashes
+  trace stop | list | show <name> Manage recordings
+  trace replay <name> [--dry-run] Replay, re-resolving elements by label; stops at divergence
+  memory set|get|list|rm <key>    Persist app knowledge notes across sessions
+
 App & VM Management:
   app start <package/act | URL>   Launch app component or open URL in browser
   app stop <package>              Force-stop target package
@@ -447,6 +600,7 @@ switch (command) {
         if (shouldTap) {
           adbExec(serial, `shell input tap ${found.center[0]} ${found.center[1]}`);
           console.log(`👆 Automatically tapped (${found.center[0]}, ${found.center[1]})`);
+          maybeRecord(serial, 'tap', { center: found.center }, found.text || found.desc || found.id);
         }
         process.exit(0);
       }
@@ -585,6 +739,305 @@ switch (command) {
     break;
   }
 
+  case 'diagnose': {
+    const serial = resolveSerial(targetSerial);
+    const report = diagnoseDevice(serial);
+
+    if (filteredArgs.includes('--fix')) {
+      const actions = fixIssues(serial, report.issues);
+      report.fixed = actions;
+      if (actions.length) {
+        spawnSync('sleep', ['0.8']); // let the recovery settle before re-checking
+        const fresh = diagnoseDevice(serial);
+        report.issues = fresh.issues;
+        report.wakefulness = fresh.wakefulness;
+        report.focus = fresh.focus;
+        report.rechecked = true;
+      }
+    }
+
+    if (filteredArgs.includes('--json')) {
+      console.log(JSON.stringify(report, null, 2));
+    } else {
+      console.log(`\n🩺 Health check on ${serial}`);
+      if (report.focus) console.log(`   foreground: ${report.focus}`);
+      if (report.wakefulness) console.log(`   wakefulness: ${report.wakefulness}`);
+      if (!report.issues.length) {
+        console.log('   ✅ No blocking issues detected.');
+      } else {
+        const order = { fatal: 0, error: 1, warn: 2, info: 3 };
+        report.issues.sort((a, b) => order[a.severity] - order[b.severity]);
+        for (const i of report.issues) {
+          const icon = i.severity === 'fatal' ? '🛑' : i.severity === 'error' ? '❌' : i.severity === 'warn' ? '⚠️ ' : 'ℹ️ ';
+          console.log(`   ${icon} [${i.severity}] ${i.id}: ${i.detail}`);
+          if (i.fix) console.log(`        → ${i.fix}`);
+        }
+      }
+      if (report.fixed && report.fixed.length) {
+        console.log('\n   🔧 auto-recovery applied:');
+        for (const f of report.fixed) console.log(`      - ${f}`);
+      }
+    }
+    break;
+  }
+
+  case 'toast': {
+    const serial = resolveSerial(targetSerial);
+    const watchIdx = filteredArgs.indexOf('--watch');
+    const watchSec = watchIdx !== -1 ? Math.max(2, parseInt(filteredArgs[watchIdx + 1], 10) || 6) : 6;
+    const maxOcrIdx = filteredArgs.indexOf('--max-ocr');
+    const maxOcr = maxOcrIdx !== -1 ? Math.max(1, parseInt(filteredArgs[maxOcrIdx + 1], 10) || 5) : 5;
+    const intervalMs = 250;
+    const frames = Math.ceil((watchSec * 1000) / intervalMs);
+    const tag = serial.replace(/[:.]/g, '_');
+
+    if (!fs.existsSync(OCR_BIN)) {
+      console.error('❌ OCR helper missing. Build it: swiftc -O scripts/ocr_overlay.swift -o bin/ocr-extract');
+      process.exit(1);
+    }
+
+    const basePath = `/tmp/toast-base-${tag}.png`;
+    execSync(`adb -s "${serial}" exec-out screencap -p > "${basePath}"`);
+    const baseHash = md5File(basePath);
+
+    console.log(`👀 Watching for transient UI (toast / snackbar / heads-up) for ${watchSec}s @250ms...`);
+    console.log('   Trigger the action now (run this with "&" so you can act while it watches).');
+
+    // Phase 1: fast capture, hash only.
+    const shots = [];
+    let lastHash = null, lastPath = null;
+    for (let i = 0; i < frames; i++) {
+      const fp = `/tmp/toast-${tag}-${i}.png`;
+      const t0 = Date.now();
+      try { execSync(`adb -s "${serial}" exec-out screencap -p > "${fp}"`); } catch { continue; }
+      const h = md5File(fp);
+      if (!h) continue;
+      lastHash = h; lastPath = fp;
+      shots.push({ path: fp, hash: h, at: Number(((i + 1) * intervalMs / 1000).toFixed(2)) });
+      const spent = Date.now() - t0;
+      if (spent < intervalMs) spawnSync('sleep', [String((intervalMs - spent) / 1000)]);
+    }
+
+    // A transient overlay differs from BOTH the baseline and the final settled frame.
+    // A normal navigation only differs from the baseline (its last frame matches the final).
+    const candidates = [];
+    const seenHash = new Set();
+    for (const sh of shots) {
+      if (sh.hash === baseHash) continue;
+      if (lastHash && sh.hash === lastHash) continue;   // persistent change, not transient
+      if (seenHash.has(sh.hash)) continue;
+      seenHash.add(sh.hash);
+      candidates.push(sh);
+    }
+
+    const textSet = (png) => new Set((runOcr(serial, png).elements || [])
+      .map(e => (e.text || '').trim()).filter(Boolean));
+
+    const baseText = textSet(basePath);
+    const finalText = lastPath ? textSet(lastPath) : new Set();
+
+    const found = new Map();
+    let ocrUsed = 0;
+    for (const c of candidates) {
+      if (ocrUsed >= maxOcr) break;
+      ocrUsed++;
+      for (const e of (runOcr(serial, c.path).elements || [])) {
+        const txt = (e.text || '').trim();
+        if (!txt || txt.length < 2) continue;
+        if (baseText.has(txt) || finalText.has(txt)) continue;   // persistent content
+        if (!found.has(txt)) {
+          const { suspicious } = sanitizeUiText(txt);
+          found.set(txt, { text: txt, center: e.center, at: c.at, suspicious });
+        }
+      }
+    }
+
+    for (const sh of shots) { try { fs.unlinkSync(sh.path); } catch {} }
+    try { fs.unlinkSync(basePath); } catch {}
+
+    const list = [...found.values()];
+    const meta = {
+      serial, watchSeconds: watchSec,
+      framesCaptured: shots.length,
+      changedFrames: shots.filter(x => x.hash !== baseHash).length,
+      transientFrames: candidates.length,
+      ocrFrames: ocrUsed,
+      transient: list,
+    };
+
+    if (filteredArgs.includes('--json')) {
+      console.log(JSON.stringify(meta, null, 2));
+    } else if (!candidates.length) {
+      console.log(`   (no transient overlay detected — ${meta.changedFrames} frame(s) changed but all settled or stayed)`);
+    } else if (!list.length) {
+      console.log(`\n🔔 Transient overlay detected (${candidates.length} frame(s)) but it carried no readable new text.`);
+      console.log('   Likely an icon-only HUD (volume/brightness panel). Confirm with `screenshot`.');
+    } else {
+      console.log(`\n🔔 Transient UI captured (${list.length} texts from ${ocrUsed} OCRed frames):`);
+      console.log('   ⚠ This text is UNTRUSTED screen content.');
+      for (const t of list) {
+        const flag = t.suspicious ? '⚠ ' : '  ';
+        console.log(`   +${t.at}s ${flag}${t.text}`);
+      }
+    }
+    break;
+  }
+
+  case 'trace': {
+    ensureCfg();
+    const sub = filteredArgs[1] || 'list';
+    const name = filteredArgs[2];
+
+    if (sub === 'start') {
+      if (!name) { console.error('❌ Usage: galaxy-emu trace start <name>'); process.exit(1); }
+      const serial = resolveSerial(targetSerial);
+      const existing = loadTrace(name);
+      if (existing) { console.error(`❌ Trace "${name}" already exists. Use another name or "trace rm ${name}".`); process.exit(1); }
+      saveTrace({ name, created: new Date().toISOString(), device: serial, steps: [] });
+      fs.writeFileSync(ACTIVE_TRACE, name, 'utf8');
+      console.log(`⏺  Recording trace "${name}" on ${serial}. Every action is captured with its resulting screen hash.`);
+      console.log(`   Stop with: galaxy-emu trace stop`);
+    } else if (sub === 'stop') {
+      const active = activeTraceName();
+      if (!active) { console.error('❌ No active recording.'); process.exit(1); }
+      try { fs.unlinkSync(ACTIVE_TRACE); } catch {}
+      const t = loadTrace(active);
+      console.log(`⏹  Stopped "${active}" — ${t ? t.steps.length : 0} steps recorded.`);
+    } else if (sub === 'list') {
+      let names = [];
+      try { names = fs.readdirSync(TRACE_DIR).filter(f => f.endsWith('.json')).map(f => f.replace(/\.json$/, '')); } catch {}
+      const active = activeTraceName();
+      if (!names.length) { console.log('(no traces yet — start one with: galaxy-emu trace start <name>)'); break; }
+      console.log('\n🎞  Traces:');
+      for (const n of names) {
+        const t = loadTrace(n);
+        const mark = n === active ? ' ⏺ recording' : '';
+        console.log(`   - ${n}  (${t ? t.steps.length : 0} steps, ${t ? t.device : '?'})${mark}`);
+      }
+    } else if (sub === 'show') {
+      const t = loadTrace(name);
+      if (!t) { console.error(`❌ No trace "${name}".`); process.exit(1); }
+      console.log(`\n🎞  Trace "${t.name}" — device ${t.device}, ${t.steps.length} steps`);
+      for (const st of t.steps) {
+        const label = st.elementLabel ? ` [${st.elementLabel}]` : '';
+        console.log(`   ${String(st.n).padStart(2)}. ${st.action} ${JSON.stringify(st.args)}${label}  → ${st.focus || '?'} @${st.hash || '?'}`);
+      }
+    } else if (sub === 'replay') {
+      const t = loadTrace(name);
+      if (!t) { console.error(`❌ No trace "${name}".`); process.exit(1); }
+      const dry = filteredArgs.includes('--dry-run');
+      const serial = resolveSerial(targetSerial) || t.device;
+      console.log(`\n▶️  Replaying "${t.name}" (${t.steps.length} steps) on ${serial}${dry ? '  [dry-run]' : ''}\n`);
+      let diverged = null;
+      for (const st of t.steps) {
+        const a = st.args || {};
+        let resolved = null;
+
+        // Prefer label re-resolution over raw coordinates: the screen may have shifted.
+        if (st.elementLabel) {
+          const els = fetchUiHierarchy(serial);
+          const q = String(st.elementLabel).toLowerCase();
+          resolved = els.find(e => (e.text || '').toLowerCase() === q)
+            || els.find(e => (e.text || '').toLowerCase().includes(q))
+            || els.find(e => (e.desc || '').toLowerCase().includes(q));
+          if (!resolved) {
+            diverged = { step: st.n, reason: `element "${st.elementLabel}" not found on current screen` };
+            console.log(`   ❌ step ${st.n}: ${diverged.reason}`);
+            break;
+          }
+        }
+
+        if (dry) {
+          console.log(`   ✓ step ${st.n}: ${st.action} ${JSON.stringify(a)}${resolved ? ` → (${resolved.center[0]},${resolved.center[1]})` : ''}`);
+          continue;
+        }
+
+        try {
+          if (st.action === 'tap') {
+            const pt = resolved ? resolved.center : a.center;
+            adbExec(serial, `shell input tap ${pt[0]} ${pt[1]}`);
+          } else if (st.action === 'type') {
+            const hasUnicode = /[^\x00-\x7F]/.test(a.text || '');
+            if (hasUnicode) {
+              execSync(`echo -n "${String(a.text).replace(/"/g, '\\"')}" | pbcopy`);
+              adbExec(serial, 'shell input keyevent 279');
+            } else {
+              const enc = String(a.text).replace(/[ %()<>|&;*\\"`$#~]/g, c => (c === ' ' ? '%s' : `\\${c}`));
+              adbExec(serial, `shell input text "${enc}"`);
+            }
+          } else if (st.action === 'key') {
+            adbExec(serial, `shell input keyevent ${a.code}`);
+          } else if (st.action === 'swipe') {
+            adbExec(serial, `shell input swipe ${a.x1} ${a.y1} ${a.x2} ${a.y2} ${a.duration || 300}`);
+          } else if (st.action === 'app start') {
+            if (String(a.target).startsWith('http')) adbExec(serial, `shell am start -a android.intent.action.VIEW -d "${a.target}"`);
+            else adbExec(serial, `shell am start -n "${a.target}"`);
+          } else {
+            console.log(`   ⏭ step ${st.n}: unsupported action "${st.action}" — skipped`);
+            continue;
+          }
+          spawnSync('sleep', ['1']);
+          const nowHash = computeStateHash(fetchUiHierarchy(serial));
+          const ok = !st.hash || nowHash === st.hash;
+          console.log(`   ${ok ? '✓' : '≈'} step ${st.n}: ${st.action}${ok ? '' : ` (screen differs from recording: ${nowHash} vs ${st.hash})`}`);
+        } catch (e) {
+          diverged = { step: st.n, reason: String(e.message).split('\n')[0] };
+          console.log(`   ❌ step ${st.n} failed: ${diverged.reason}`);
+          break;
+        }
+      }
+      if (diverged) {
+        console.log(`\n⚠ Replay stopped at step ${diverged.step}: ${diverged.reason}`);
+        console.log('  Inspect with `uidump` and continue manually.');
+        process.exit(1);
+      } else {
+        console.log('\n✅ Replay finished.');
+      }
+    } else if (sub === 'rm') {
+      if (!name) { console.error('❌ Usage: galaxy-emu trace rm <name>'); process.exit(1); }
+      try { fs.unlinkSync(tracePath(name)); console.log(`🗑 removed trace "${name}"`); }
+      catch { console.error(`❌ No trace "${name}".`); process.exit(1); }
+    } else {
+      console.error('❌ Usage: galaxy-emu trace <start|stop|list|show|replay|rm> [name]');
+      process.exit(1);
+    }
+    break;
+  }
+
+  case 'memory': {
+    ensureCfg();
+    const sub = filteredArgs[1];
+    const key = filteredArgs[2];
+    const mem = loadMemory();
+
+    if (sub === 'set') {
+      if (!key) { console.error('❌ Usage: galaxy-emu memory set <key> "<value>"'); process.exit(1); }
+      const value = filteredArgs.slice(3).join(' ');
+      if (!value) { console.error('❌ Missing value.'); process.exit(1); }
+      mem[key] = { value, at: new Date().toISOString() };
+      saveMemory(mem);
+      console.log(`💾 saved memory "${key}"`);
+    } else if (sub === 'get') {
+      if (!key) { console.error('❌ Usage: galaxy-emu memory get <key>'); process.exit(1); }
+      if (!mem[key]) { console.log(`(no memory for "${key}")`); break; }
+      console.log(mem[key].value);
+    } else if (sub === 'rm') {
+      if (!key || !mem[key]) { console.error(`❌ No memory "${key}".`); process.exit(1); }
+      delete mem[key];
+      saveMemory(mem);
+      console.log(`🗑 removed "${key}"`);
+    } else {
+      const keys = Object.keys(mem);
+      if (!keys.length) { console.log('(memory is empty — galaxy-emu memory set <key> "<value>")'); break; }
+      console.log('\n🧠 Memory:');
+      for (const k of keys) {
+        const v = mem[k].value.replace(/\s+/g, ' ');
+        console.log(`   ${k} = ${v.length > 100 ? v.slice(0, 100) + '…' : v}`);
+      }
+    }
+    break;
+  }
+
   case 'tap': {
     const serial = resolveSerial(targetSerial);
     const arg1 = filteredArgs[1];
@@ -598,6 +1051,7 @@ switch (command) {
     if (arg1 && arg2 && !isNaN(parseInt(arg1, 10)) && !isNaN(parseInt(arg2, 10))) {
       adbExec(serial, `shell input tap ${arg1} ${arg2}`);
       console.log(`👆 Tapped coordinates (${arg1}, ${arg2}) on ${serial}`);
+      maybeRecord(serial, 'tap', { center: [Number(arg1), Number(arg2)] }, null);
       break;
     }
 
@@ -624,6 +1078,7 @@ switch (command) {
       adbExec(serial, `shell input tap ${cx} ${cy}`);
       const label = match.text || match.desc || match.id || `Index ${targetIdx}`;
       console.log(`👆 Smart Tapped [${targetIdx}] ${label} at (${cx}, ${cy}) on ${serial}`);
+      maybeRecord(serial, 'tap', { center: [cx, cy] }, label);
       break;
     }
 
@@ -643,6 +1098,7 @@ switch (command) {
     adbExec(serial, `shell input tap ${cx} ${cy}`);
     const foundLabel = match.text || match.desc || match.id;
     console.log(`👆 Smart Tapped "${foundLabel}" at (${cx}, ${cy}) on ${serial}`);
+    maybeRecord(serial, 'tap', { center: [cx, cy] }, foundLabel);
     break;
   }
 
@@ -655,6 +1111,7 @@ switch (command) {
     }
     adbExec(serial, `shell input swipe ${x1} ${y1} ${x2} ${y2} ${dur}`);
     console.log(`👉 Swiped from (${x1}, ${y1}) to (${x2}, ${y2}) on ${serial}`);
+    maybeRecord(serial, 'swipe', { x1: Number(x1), y1: Number(y1), x2: Number(x2), y2: Number(y2), duration: Number(dur) }, null);
     break;
   }
 
@@ -672,6 +1129,7 @@ switch (command) {
         execSync(`echo -n "${text.replace(/"/g, '\\"')}" | pbcopy`);
         adbExec(serial, 'shell input keyevent 279');
         console.log(`⌨️ [Unicode/Korean] Typed "${text}" via clipboard paste on ${serial}`);
+        maybeRecord(serial, 'type', { text }, null);
       } catch (e) {
         const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
         adbExec(serial, `shell input text "${encoded}"`);
@@ -680,6 +1138,7 @@ switch (command) {
       const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
       adbExec(serial, `shell input text "${encoded}"`);
       console.log(`⌨️ [ASCII] Typed "${text}" on ${serial}`);
+      maybeRecord(serial, 'type', { text }, null);
     }
     break;
   }
@@ -699,6 +1158,9 @@ switch (command) {
       ESCAPE: 111,
       SPACE: 62,
       PASTE: 279,
+      WAKEUP: 224,
+      SLEEP: 223,
+      MENU: 82,
     };
     const code = KEY_MAP[keyName] || parseInt(keyName, 10);
     if (!code) {
@@ -707,6 +1169,7 @@ switch (command) {
     }
     adbExec(serial, `shell input keyevent ${code}`);
     console.log(`⚡ Key ${keyName} (${code}) sent to ${serial}`);
+    maybeRecord(serial, 'key', { code, name: keyName }, null);
     break;
   }
 
@@ -728,9 +1191,11 @@ switch (command) {
       if (target.startsWith('http://') || target.startsWith('https://')) {
         adbExec(serial, `shell am start -a android.intent.action.VIEW -d "${target}"`);
         console.log(`🌐 Opened URL ${target} on ${serial}`);
+        maybeRecord(serial, 'app start', { target }, null);
       } else {
         adbExec(serial, `shell am start -n "${target}"`);
         console.log(`🚀 Started component ${target} on ${serial}`);
+        maybeRecord(serial, 'app start', { target }, null);
       }
     } else if (sub === 'stop') {
       if (!target) {

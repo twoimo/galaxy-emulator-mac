@@ -1,6 +1,6 @@
 ---
 name: "galaxy-control"
-description: "Unified agent control for Samsung Galaxy (Tailscale wireless ADB) and Apple Silicon ARM64 Android Virtual Devices: indexed taps, scroll-until-found, on-device OCR fallback, Set-of-Marks vision, Korean/Unicode typing, notification extraction, screen-state loop detection, and untrusted-UI hardening."
+description: "Unified agent control for Samsung Galaxy (Tailscale wireless ADB) and Apple Silicon ARM64 Android Virtual Devices: indexed taps, scroll-until-found, on-device OCR fallback, Set-of-Marks vision, Korean/Unicode typing, notification extraction, screen-state loop detection, transient toast capture, failure diagnosis with auto-recovery, trace record/replay, persistent memory, and untrusted-UI hardening."
 ---
 
 # Galaxy & Android Unified Control (Agent Specification)
@@ -134,6 +134,75 @@ galaxy-emu mirror -s <serial>     # 60fps scrcpy, phone screen kept off
 
 ---
 
+## 🩺 Failure detection & recovery (`diagnose`)
+
+```bash
+galaxy-emu diagnose                # human-readable report
+galaxy-emu diagnose --json         # machine-readable
+galaxy-emu diagnose --fix          # apply safe recoveries, then re-check
+```
+
+Detects and reports, ordered by severity:
+
+| id | What it means | Auto-fix |
+|---|---|---|
+| `transport` | ADB state is offline/missing | prints the reconnect sequence |
+| `screen_off` | `mWakefulness` is not `Awake` | sends `KEYCODE_WAKEUP` |
+| `locked` | Keyguard showing | none — PIN/biometric cannot be automated |
+| `crash_or_anr_dialog` | `AppErrorDialog` / ANR window present | taps `Close app` / `닫기` / `확인` / `Wait` |
+| `permission_dialog` | `GrantPermissionsActivity` on top | none — the grant decision is a policy choice |
+| `app_crash` | `FATAL EXCEPTION` in recent logcat | reports, suggests relaunch |
+| `app_anr` | `ANR in` in recent logcat | reports |
+| `keyboard_shown` | soft keyboard covering targets | sends `BACK` |
+| `storage_low` | `/data` ≥ 90% used | reports |
+
+Run `diagnose` first whenever an action produces no visible change.
+
+## 🔔 Transient UI capture (`toast`)
+
+```bash
+galaxy-emu toast --watch 8          # sample 8s @250ms
+galaxy-emu toast --watch 12 --json
+```
+
+Toasts and snackbars often vanish before `uidump` can see them, and they never appear in logcat.
+
+How it works:
+1. **Phase 1 (fast, hash only)** — captures frames every 250ms and hashes them, so the cadence is actually held.
+2. **Transient filter** — a frame counts only if it differs from **both** the baseline and the final settled frame. A normal navigation differs from the baseline but matches the final frame, so it is excluded.
+3. **Phase 2 (bounded OCR)** — OCRs at most `--max-ocr` (default 5) candidate frames and reports text absent from both the baseline and the final frame.
+
+Run it in the background so you can act while it watches:
+```bash
+galaxy-emu toast --watch 10 & sleep 1; galaxy-emu tap "Save"; wait
+```
+
+**Limitations (measured):** icon-only HUDs (volume/brightness panel) produce a transient frame but no readable text — the tool says so explicitly rather than inventing output. A toast shorter than ~1s can fall between samples.
+
+## 🎞 Trace record / replay and 🧠 memory
+
+```bash
+galaxy-emu trace start <name>       # begin recording
+   ...actions...
+galaxy-emu trace stop
+galaxy-emu trace list
+galaxy-emu trace show <name>
+galaxy-emu trace replay <name> --dry-run
+galaxy-emu trace replay <name>      # stops at the first divergence, exit code 1
+galaxy-emu trace rm <name>
+```
+
+Each recorded step stores the action, its arguments, the resolved element label, the resulting foreground activity and a screen hash.
+
+Replay **re-resolves elements by label first** and only falls back to recorded coordinates, so it survives layout shifts. When the screen after a step differs from the recording it prints `≈`, and when a label is missing it stops with the step number and reason instead of continuing blindly.
+
+```bash
+galaxy-emu memory set "com.android.chrome:login" "skip sign-in with 'Use without an account'"
+galaxy-emu memory get "com.android.chrome:login"
+galaxy-emu memory list
+```
+Memory is a plain JSON store at `~/.galaxy-control/memory.json`; traces live in `~/.galaxy-control/traces/`. Use it to carry app-specific knowledge across sessions instead of rediscovering it.
+
 ## Build helpers
 
 ```bash
@@ -155,3 +224,11 @@ Device: `emulator-5554` (Android 14, arm64-v8a, 1440×3120 @505dpi, Apple M5 Max
 | Injection defense | English + Korean payloads flagged `⚠UNTRUSTED`; benign lines clean |
 | Offline handling | dead serial now exits with recovery steps, no stack trace |
 | `find --tap`, `clear`, `type` (Korean), `notifications`, `som` | all re-verified after changes |
+| `diagnose` | screen-off detected (`Asleep`), `--fix` woke it and re-check confirmed `Awake`; keyboard overlay detected and hidden |
+| `toast` | transient frame discriminator isolated 3 overlay frames for the volume panel; a real 3s snackbar yielded its text `저장이 완료되었습니다` |
+| `trace` | 3-step flow recorded with hashes, dry-run re-resolved the label, real replay reproduced it; a deliberately broken label stopped at step 2 with exit 1 |
+| `memory` | set/get/list round-trip verified |
+
+### Not verified in this session
+
+- `crash_or_anr_dialog` auto-dismiss and `app_crash`/`app_anr` logcat branches: `am crash` is a no-op on this emulator build, so no crash dialog could be synthesized. The detection patterns are implemented but were not exercised against a real crash.
