@@ -1,0 +1,29 @@
+{
+  "name": "galaxy-emulator-mac",
+  "version": "1.0.0",
+  "description": "Run Apple-Silicon-native Samsung Galaxy ARM64 Android emulators with lightweight CLI",
+  "main": "bin/galaxy-emu",
+  "bin": {
+    "galaxy-emu": "./bin/galaxy-emu"
+  },
+  "scripts": {
+    "setup": "./scripts/setup.sh",
+    "create:s24u": "./scripts/create.sh s24u",
+    "create:flip5": "./scripts/create.sh flip5",
+    "run:s24u": "./scripts/run.sh s24u",
+    "run:flip5": "./scripts/run.sh flip5"
+  },
+  "keywords": [
+    "android",
+    "emulator",
+    "apple-silicon",
+    "samsung",
+    "galaxy",
+    "s24-ultra",
+    "z-flip5",
+    "macos",
+    "m-series"
+  ],
+  "author": "Yeonwoo Choi <twoimo>",
+  "license": "MIT"
+}

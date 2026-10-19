@@ -1,0 +1,135 @@
+#!/usr/bin/env node
+
+const { execSync, spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const ROOT_DIR = path.resolve(__dirname, '..');
+const args = process.argv.slice(2);
+const command = args[0] || 'help';
+
+function printHelp() {
+  console.log(`
+🌌 Galaxy Emulator Mac (Apple Silicon Native)
+==============================================
+Usage: galaxy-emu <command> [options]
+
+Commands:
+  setup              Install or verify Android SDK, cmdline-tools, emulator, and ARM64 image
+  create <profile>   Create and tune an AVD (profiles: s24u, flip5)
+  run <profile>      Launch standalone emulator window (options: --cold, --headless)
+  list               List available profiles and existing AVDs
+  doctor             Check Apple Silicon environment, Hypervisor support, and SDK paths
+  install <apk>      Install APK to currently running emulator instance via adb
+  help               Show this help message
+
+Examples:
+  npx galaxy-emu setup
+  npx galaxy-emu create s24u
+  npx galaxy-emu run s24u
+  npx galaxy-emu run flip5 --cold
+`);
+}
+
+function runScript(scriptName, scriptArgs = []) {
+  const scriptPath = path.join(ROOT_DIR, 'scripts', scriptName);
+  const child = spawn(scriptPath, scriptArgs, { stdio: 'inherit' });
+  child.on('exit', (code) => {
+    process.exit(code || 0);
+  });
+}
+
+switch (command) {
+  case 'setup':
+    runScript('setup.sh');
+    break;
+
+  case 'create': {
+    const profile = args[1] || 's24u';
+    runScript('create.sh', [profile]);
+    break;
+  }
+
+  case 'run': {
+    const profile = args[1] || 's24u';
+    const extraArgs = [];
+    if (args.includes('--cold')) extraArgs.push('-no-snapshot-load');
+    if (args.includes('--headless')) extraArgs.push('-no-window');
+    runScript('run.sh', [profile, ...extraArgs]);
+    break;
+  }
+
+  case 'list': {
+    console.log('\n📱 Available Device Profiles:');
+    const profiles = fs.readdirSync(path.join(ROOT_DIR, 'profiles'))
+      .filter(f => f.endsWith('.json'))
+      .map(f => require(path.join(ROOT_DIR, 'profiles', f)));
+    for (const p of profiles) {
+      console.log(`  - [${p.id}] ${p.displayName} (${p.width}x${p.height}, ${p.density}dpi, ${p.ramMb}MB RAM)`);
+    }
+
+    console.log('\n💾 Installed AVDs in ~/.android/avd:');
+    try {
+      const avdList = execSync('emulator -list-avds 2>/dev/null || true').toString().trim();
+      if (avdList) {
+        console.log(avdList.split('\n').map(l => `  * ${l}`).join('\n'));
+      } else {
+        console.log('  (No AVDs found yet. Run `galaxy-emu create s24u` to create one)');
+      }
+    } catch {
+      console.log('  (Could not query emulator binary)');
+    }
+    break;
+  }
+
+  case 'doctor': {
+    console.log('\n🩺 Checking Environment for Galaxy Emulator on Apple Silicon:');
+    const arch = process.arch;
+    console.log(`  - Architecture: ${arch} ${arch === 'arm64' ? '✅ (Apple Silicon Native)' : '⚠️'}`);
+    
+    // Ensure /opt/homebrew/bin is in PATH for Apple Silicon Mac
+    if (!process.env.PATH.includes('/opt/homebrew/bin')) {
+      process.env.PATH = `/opt/homebrew/bin:${process.env.PATH}`;
+    }
+
+    const sdkPath = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || path.join(process.env.HOME, 'Library/Android/sdk');
+    console.log(`  - SDK Root: ${sdkPath} ${fs.existsSync(sdkPath) ? '✅' : '❌ (Run setup to configure)'}`);
+    
+    try {
+      const adbVersion = execSync('adb --version 2>/dev/null').toString().split('\n')[0];
+      console.log(`  - ADB: ${adbVersion} ✅`);
+    } catch {
+      console.log('  - ADB: not found in PATH ❌');
+    }
+
+    try {
+      const emuVersion = execSync('emulator -version 2>/dev/null').toString().split('\n')[0];
+      console.log(`  - Emulator: ${emuVersion} ✅`);
+    } catch {
+      console.log('  - Emulator: not found in PATH (will check $ANDROID_HOME/emulator)');
+    }
+    break;
+  }
+
+  case 'install': {
+    const apk = args[1];
+    if (!apk) {
+      console.error('❌ Please specify APK path: galaxy-emu install <path/to/app.apk>');
+      process.exit(1);
+    }
+    console.log(`📦 Installing ${apk} via adb...`);
+    try {
+      execSync(`adb install -r "${apk}"`, { stdio: 'inherit' });
+      console.log('✅ Installation complete!');
+    } catch (e) {
+      console.error('❌ Installation failed:', e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case 'help':
+  default:
+    printHelp();
+    break;
+}
