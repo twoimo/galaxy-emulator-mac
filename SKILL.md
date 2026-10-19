@@ -181,23 +181,28 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
     .btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius, 6px); font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: var(--surface-primary); color: var(--foreground); cursor: pointer; text-decoration: none; }
     .btn:hover { background: var(--muted); }
     .btn-primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
-    .console-card { flex: 1; background: #0f1115; color: #cbd5e1; border: 1px solid var(--border); border-radius: var(--radius, 8px); display: flex; flex-direction: column; overflow: hidden; min-height: 180px; }
-    .console-header { background: #181b21; padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.08); font-size: 11px; font-family: var(--font-mono, monospace); }
+    .console-card { flex: 1; background: var(--surface-secondary); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius, 8px); display: flex; flex-direction: column; overflow: hidden; min-height: 180px; }
+    .console-header { background: var(--muted); padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font-size: 11px; font-family: var(--font-mono, monospace); }
     .mac-dots { display: flex; gap: 5px; }
     .mac-dot { width: 8px; height: 8px; border-radius: 50%; }
-    .dot-r { background: #ff5f56; } .dot-y { background: #ffbd2e; } .dot-g { background: #27c93f; }
-    .console-title { font-size: 10px; color: #94a3b8; }
-    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.6; overflow-y: auto; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+    .dot-r { background: var(--destructive, #ef4444); } .dot-y { background: var(--chart-4, #eab308); } .dot-g { background: var(--success, #10b981); }
+    .console-title { font-size: 10px; color: var(--muted-foreground); }
+    .console-tools { display: flex; gap: 6px; }
+    .tag-filter { font-size: 9px; background: var(--surface-primary); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; color: var(--muted-foreground); cursor: pointer; }
+    .tag-filter.active { background: var(--chart-1); color: var(--primary-foreground, #fff); border-color: var(--chart-1); }
+    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.6; overflow-y: auto; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; background: var(--surface-secondary); }
+    .console-body::-webkit-scrollbar { height: 4px; width: 4px; }
+    .console-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
     .log-line { display: block; margin-bottom: 2px; white-space: nowrap; }
-    .log-time { color: #64748b; margin-right: 6px; }
-    .log-info { color: #38bdf8; }
-    .log-warn { color: #facc15; }
-    .log-err  { color: #f87171; }
-    .log-adbd { color: #4ade80; }
-    .log-tag  { color: #a78bfa; margin-right: 6px; }
-    .quick-keys { display: flex; gap: 6px; padding: 4px 8px; background: #181b21; border-top: 1px solid rgba(255,255,255,0.08); }
-    .key-btn { flex: 1; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: #94a3b8; border-radius: 4px; font-size: 10px; padding: 3px 0; text-align: center; cursor: pointer; }
-    .key-btn:hover { background: rgba(255,255,255,0.12); color: #fff; }
+    .log-time { color: var(--muted-foreground); margin-right: 6px; }
+    .log-info { color: var(--chart-1); font-weight: 600; margin-right: 4px; }
+    .log-warn { color: var(--chart-4, #eab308); font-weight: 600; margin-right: 4px; }
+    .log-err  { color: var(--destructive); font-weight: 600; margin-right: 4px; }
+    .log-adbd { color: var(--success); font-weight: 600; margin-right: 4px; }
+    .log-tag  { color: var(--chart-2, #8b5cf6); margin-right: 6px; }
+    .quick-keys { display: flex; gap: 6px; padding: 4px 8px; background: var(--muted); border-top: 1px solid var(--border); }
+    .key-btn { flex: 1; background: var(--surface-primary); border: 1px solid var(--border); color: var(--foreground); border-radius: 4px; font-size: 10px; padding: 3px 0; text-align: center; cursor: pointer; }
+    .key-btn:hover { background: var(--accent); color: var(--accent-foreground); }
   </style>
 </head>
 <body>
