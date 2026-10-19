@@ -171,10 +171,19 @@ function sendViaAdbKeyboard(serial, text) {
   adbRun(serial, ['shell', 'am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', Buffer.from(text, 'utf8').toString('base64')]);
 }
 
+// The keyboard to switch back to is written to disk before the switch and removed after it, so a
+// run that is killed or fails to switch back leaves a record the next `type` uses to finish the job.
+const imeRestoreFile = serial => path.join(CFG_DIR, `ime-restore-${encodeURIComponent(serial)}`);
+function pendingImeRestore(serial) {
+  try { return fs.readFileSync(imeRestoreFile(serial), 'utf8').trim(); } catch { return ''; }
+}
+
 function typeWithSwitchedIme(serial, text, saved) {
   if (!saved || saved === 'null' || hasControlChars(saved)) {
     throw new Error(`cannot read the current default keyboard (got ${JSON.stringify(saved)}), so ADBKeyBoard was not selected and nothing was typed`);
   }
+  ensureCfg();
+  fs.writeFileSync(imeRestoreFile(serial), saved, 'utf8');
   const set = setImeAndWait(serial, ADB_KEYBOARD_IME);
   if (set !== true) {
     throw new Error(`could not select ADBKeyBoard (${typeof set === 'string' ? set : 'default_input_method did not change'}), so nothing was typed. ` +
@@ -188,8 +197,9 @@ function typeWithSwitchedIme(serial, text, saved) {
   } finally {
     if (setImeAndWait(serial, saved) !== true) {
       throw new Error(`RESTORE FAILED: could not switch the default keyboard back to ${saved} after selecting ADBKeyBoard. Run: adb shell ime set ${saved}` +
-        (sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : ''));
+        (sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : '. The text WAS sent, so do not type it again; the next non-ASCII type retries the switch back'));
     }
+    try { fs.unlinkSync(imeRestoreFile(serial)); } catch {}
   }
   if (sendError) throw sendError;
 }
@@ -199,14 +209,15 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
   }
   if (/[^\x00-\x7F]/.test(text)) {
     const ime = defaultIme(serial);
-    if (ime === ADB_KEYBOARD_IME) {
+    const pending = ime === ADB_KEYBOARD_IME ? pendingImeRestore(serial) : '';
+    if (ime === ADB_KEYBOARD_IME && !pending) {
       sendViaAdbKeyboard(serial, text);
       return 'adbkeyboard';
     }
     const installed = adbTry(serial, ['shell', 'pm', 'list', 'packages', ADB_KEYBOARD_PKG])
       .split('\n').some(l => l.trim() === `package:${ADB_KEYBOARD_PKG}`);
     if (installed) {
-      typeWithSwitchedIme(serial, text, ime);
+      typeWithSwitchedIme(serial, text, pending || ime);
       return 'adbkeyboard-switched';
     }
     if (paste) {
