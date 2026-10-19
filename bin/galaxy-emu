@@ -433,9 +433,16 @@ function runOcr(serial, pngPath) {
 
 function fetchUiHierarchy(serial) {
   const tempPath = '/data/local/tmp/uidump.xml';
+  // uiautomator dump exits 0 without writing the file when the screen never goes idle (video,
+  // animation), so remove the previous dump first; otherwise cat returns the old screen.
+  adbRun(serial, ['shell', 'rm', '-f', tempPath]);
   adbRun(serial, ['shell', 'uiautomator', 'dump', tempPath]);
-  const xml = adbRun(serial, ['shell', 'cat', tempPath]);
-  
+  const xml = adbTry(serial, ['shell', 'cat', tempPath]);
+  if (!xml.includes('<hierarchy')) {
+    try { fs.unlinkSync(UI_CACHE_FILE); } catch {}
+    throw new Error('uiautomator dump wrote no hierarchy (the screen may never go idle, e.g. video playback). Use `galaxy-emu ocr` or `screenshot` instead.');
+  }
+
   const nodeTagRegex = /<node\s+([^>]+)>/g;
   let elements = [];
   let m;
