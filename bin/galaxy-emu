@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
+const UI_CACHE_FILE = '/tmp/galaxy-emu-ui.json';
+const SOM_BIN = path.join(ROOT_DIR, 'bin', 'som-drawer');
 
 const extraPaths = [
   '/opt/homebrew/bin',
@@ -58,7 +60,7 @@ function resolveSerial(explicitSerial) {
   const list = getConnectedDevices();
   if (list.length === 0) {
     console.error('❌ Error: No Android device or emulator is currently connected via ADB.');
-    console.error('👉 Tip: Run `galaxy-emu connect` for physical phone or `galaxy-emu boot s24u` for AVD.');
+    console.error('👉 Run `galaxy-emu connect` for physical phone or `galaxy-emu boot s24u` for AVD.');
     process.exit(1);
   }
   const emu = list.find(d => d.type === 'emulator');
@@ -71,38 +73,83 @@ function adbExec(serial, cmd) {
   return execSync(`adb ${serialFlag} ${cmd}`, { encoding: 'utf8' });
 }
 
+function fetchUiHierarchy(serial) {
+  const tempPath = '/data/local/tmp/uidump.xml';
+  adbExec(serial, `shell uiautomator dump ${tempPath}`);
+  const xml = adbExec(serial, `shell cat ${tempPath}`);
+  
+  const nodeTagRegex = /<node\s+([^>]+)>/g;
+  const elements = [];
+  let m;
+  let index = 1;
+  while ((m = nodeTagRegex.exec(xml)) !== null) {
+    const attrs = m[1];
+    const getText = (name) => {
+      const match = attrs.match(new RegExp(name + '="([^"]*)"'));
+      return match ? match[1] : '';
+    };
+    const text = getText('text');
+    const desc = getText('content-desc');
+    const id = getText('resource-id');
+    const clickable = getText('clickable') === 'true';
+    const bounds = getText('bounds');
+    const boundsMatch = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
+
+    if ((text || desc || (id && clickable)) && boundsMatch) {
+      const [, x1, y1, x2, y2] = boundsMatch;
+      const cx = Math.round((parseInt(x1, 10) + parseInt(x2, 10)) / 2);
+      const cy = Math.round((parseInt(y1, 10) + parseInt(y2, 10)) / 2);
+      elements.push({
+        index: index++,
+        text: text || null,
+        desc: desc || null,
+        id: id || null,
+        clickable,
+        bounds,
+        center: [cx, cy],
+      });
+    }
+  }
+
+  try {
+    fs.writeFileSync(UI_CACHE_FILE, JSON.stringify({ serial, timestamp: Date.now(), elements }), 'utf8');
+  } catch {}
+
+  return elements;
+}
+
 function printHelp() {
   console.log(`
-🌌 Galaxy Unified Control CLI (Agent-First: Physical + AVD)
-============================================================
+🌌 Galaxy Unified Control CLI (Full AI Agent-First Suite)
+==========================================================
 Usage: galaxy-emu <command> [options] [-s <serial>]
 
-Connectivity & Targeting (Physical & Network):
+Target & Connectivity:
   devices [--json]                List connected physical phones and running emulators
-  connect [ip:port]               Auto-discover and connect physical Galaxy via Tailscale
+  connect [ip:port]               Auto-detect and connect physical Galaxy via Tailscale
   disconnect [serial]             Disconnect wireless ADB transport
   mirror [-s serial]              Launch 60fps scrcpy mirroring window (screen-off mode)
 
-Virtual Machine Lifecycle (AVD):
-  boot [profile] [--headless]     Boot local ARM64 AVD (default: s24u) and wait for readiness
-  stop [serial|all]               Gracefully shut down emulator instance
-  create <profile>                Create Galaxy AVD profile (s24u, flip5)
-
-Observation Loop (LLM Vision & UI Parsing):
+Advanced Observation (Vision & SoM):
+  som [output.png]                Generate Set-of-Marks visual numbered overlay screenshot
+  uidump [--json]                 Dump clickable UI with labeled indexes [1], [2], [3]...
   screenshot [output.png]         Capture full-resolution screenshot to file
-  uidump [--json]                 Extract all clickable UI elements with center tap coordinates
   current                         Get active focused foreground package & activity
+  notifications [--json]          Extract latest incoming notifications/SMS auth codes
 
-Action Execution (Touch, Keys, Typing):
-  tap <x> <y>                     Tap exact screen coordinates
+Smart Actions (Zero Coordinate Guessing):
+  tap <index | "label" | x y>     Smart tap by index ([3]), text ("YouTube"), or coordinate
+  find "<text>" [--tap]           Scroll-until-found: auto-scroll until target element appears
+  clear                           Clear text in currently focused input field completely
+  type "<text>"                   Full Unicode/Korean typing (auto-routes via clipboard)
   swipe <x1> <y1> <x2> <y2> [ms]  Swipe/scroll between coordinates
-  type "<text>"                   Type text into focused input (auto-escaped)
-  key <NAME>                      Send keyevent: HOME, BACK, POWER, ENTER, APP_SWITCH, VOL_UP, VOL_DOWN
+  key <NAME>                      Send keyevent: HOME, BACK, POWER, ENTER, APP_SWITCH, VOL_UP
 
-App Management:
+App & VM Management:
   app start <package/act | URL>   Launch app component or open URL in browser
   app stop <package>              Force-stop target package
-  install <apk-path>              Install or update APK on target device
+  boot [profile] [--headless]     Boot local ARM64 AVD and wait for readiness
+  stop [serial|all]               Gracefully shut down emulator instance
 `);
 }
 
@@ -113,12 +160,8 @@ switch (command) {
       console.log(JSON.stringify(list, null, 2));
     } else {
       console.log('\n📱 Connected Android Devices & Emulators:');
-      if (list.length === 0) {
-        console.log('  (No active devices found. Run `galaxy-emu connect` or `galaxy-emu boot s24u`)');
-      } else {
-        for (const d of list) {
-          console.log(`  - [${d.type.toUpperCase()}] ${d.model} (${d.serial})`);
-        }
+      for (const d of list) {
+        console.log(`  - [${d.type.toUpperCase()}] ${d.model} (${d.serial})`);
       }
     }
     break;
@@ -130,12 +173,10 @@ switch (command) {
       console.log('🔍 Looking for active Android devices in Tailnet...');
       try {
         const tsOut = execSync('tailscale status 2>/dev/null', { encoding: 'utf8' });
-        const tsLines = tsOut.split('\n');
-        for (const line of tsLines) {
+        for (const line of tsOut.split('\n')) {
           if (line.includes('android') && (line.includes('active') || line.includes('idle'))) {
             const ip = line.trim().split(/\s+/)[0];
             if (ip) {
-              // Check if already connected on some port
               const devList = getConnectedDevices();
               const existing = devList.find(d => d.serial.startsWith(ip));
               if (existing) {
@@ -143,7 +184,7 @@ switch (command) {
                 process.exit(0);
               }
               targetEndpoint = `${ip}:5555`;
-              console.log(`📍 Found Tailscale Galaxy: ${ip} -> Trying default port 5555...`);
+              console.log(`📍 Found Tailscale Galaxy: ${ip} -> Trying port 5555...`);
               break;
             }
           }
@@ -161,11 +202,6 @@ switch (command) {
     try {
       const res = execSync(`adb connect ${targetEndpoint}`, { encoding: 'utf8' }).trim();
       console.log(res);
-      if (res.includes('connected to')) {
-        console.log(`🎉 Successfully connected to ${targetEndpoint}!`);
-      } else {
-        console.warn(`⚠️ adb connect returned: ${res}`);
-      }
     } catch (e) {
       console.error('❌ Failed to connect:', e.message);
       process.exit(1);
@@ -176,13 +212,12 @@ switch (command) {
   case 'disconnect': {
     const serial = targetSerial || filteredArgs[1];
     if (!serial) {
-      console.log('🔌 Disconnecting all wireless ADB connections...');
       execSync('adb disconnect');
+      console.log('🔌 Disconnected all wireless ADB connections.');
     } else {
-      console.log(`🔌 Disconnecting ${serial}...`);
       execSync(`adb disconnect ${serial}`);
+      console.log(`🔌 Disconnected ${serial}.`);
     }
-    console.log('✅ Disconnected.');
     break;
   }
 
@@ -194,51 +229,38 @@ switch (command) {
     break;
   }
 
+  case 'som': {
+    const serial = resolveSerial(targetSerial);
+    const outPath = filteredArgs[1] || path.join(process.cwd(), `som-${serial.replace(/[:.]/g, '_')}.png`);
+    const rawPng = `/tmp/som-raw-${serial.replace(/[:.]/g, '_')}.png`;
+    const jsonPath = `/tmp/som-elements-${serial.replace(/[:.]/g, '_')}.json`;
+
+    console.log(`🎨 Generating Set-of-Marks (SoM) labeled overlay for ${serial}...`);
+    execSync(`adb -s "${serial}" exec-out screencap -p > "${rawPng}"`);
+    const elements = fetchUiHierarchy(serial);
+    fs.writeFileSync(jsonPath, JSON.stringify({ serial, elements }), 'utf8');
+
+    try {
+      execSync(`"${SOM_BIN}" "${rawPng}" "${jsonPath}" "${outPath}"`, { stdio: 'inherit' });
+      console.log(`🖼️ Set-of-Marks image ready: ${outPath}`);
+    } catch (e) {
+      console.error('❌ Failed to draw SoM overlay:', e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
   case 'uidump': {
     const serial = resolveSerial(targetSerial);
     try {
-      const tempPath = '/data/local/tmp/uidump.xml';
-      adbExec(serial, `shell uiautomator dump ${tempPath}`);
-      const xml = adbExec(serial, `shell cat ${tempPath}`);
-      
-      const nodeTagRegex = /<node\s+([^>]+)>/g;
-      const elements = [];
-      let m;
-      while ((m = nodeTagRegex.exec(xml)) !== null) {
-        const attrs = m[1];
-        const getText = (name) => {
-          const match = attrs.match(new RegExp(name + '="([^"]*)"'));
-          return match ? match[1] : '';
-        };
-        const text = getText('text');
-        const desc = getText('content-desc');
-        const id = getText('resource-id');
-        const clickable = getText('clickable') === 'true';
-        const bounds = getText('bounds');
-        const boundsMatch = bounds.match(/\[(\d+),(\d+)\]\[(\d+),(\d+)\]/);
-
-        if ((text || desc || (id && clickable)) && boundsMatch) {
-          const [, x1, y1, x2, y2] = boundsMatch;
-          const cx = Math.round((parseInt(x1, 10) + parseInt(x2, 10)) / 2);
-          const cy = Math.round((parseInt(y1, 10) + parseInt(y2, 10)) / 2);
-          elements.push({
-            text: text || null,
-            desc: desc || null,
-            id: id || null,
-            clickable,
-            bounds,
-            center: [cx, cy],
-          });
-        }
-      }
-
+      const elements = fetchUiHierarchy(serial);
       if (filteredArgs.includes('--json')) {
         console.log(JSON.stringify({ serial, count: elements.length, elements }, null, 2));
       } else {
-        console.log(`\n🔍 Interactive UI Elements on ${serial} (${elements.length} found):`);
-        for (const el of elements.slice(0, 30)) {
+        console.log(`\n🔍 Labeled Interactive UI Elements on ${serial} (${elements.length} found):`);
+        for (const el of elements.slice(0, 35)) {
           const label = el.text ? `"${el.text}"` : (el.desc ? `[${el.desc}]` : el.id);
-          console.log(`  - ${label.padEnd(35)} Center: (${el.center[0]}, ${el.center[1]}) Bounds: ${el.bounds}`);
+          console.log(`  [${el.index}] ${label.padEnd(35)} Tap Center: (${el.center[0]}, ${el.center[1]})`);
         }
       }
     } catch (e) {
@@ -248,16 +270,155 @@ switch (command) {
     break;
   }
 
-  case 'tap': {
+  case 'find': {
     const serial = resolveSerial(targetSerial);
-    const x = filteredArgs[1];
-    const y = filteredArgs[2];
-    if (!x || !y) {
-      console.error('❌ Usage: galaxy-emu tap <x> <y> [-s serial]');
+    const query = (filteredArgs[1] || '').toLowerCase();
+    const shouldTap = filteredArgs.includes('--tap');
+    if (!query) {
+      console.error('❌ Usage: galaxy-emu find "<text_or_desc>" [--tap] [-s serial]');
       process.exit(1);
     }
-    adbExec(serial, `shell input tap ${x} ${y}`);
-    console.log(`👆 Tapped (${x}, ${y}) on ${serial}`);
+
+    console.log(`🔍 Searching screen for "${query}" (auto-scroll enabled)...`);
+    let found = null;
+    const maxScrolls = 6;
+
+    for (let scroll = 0; scroll <= maxScrolls; scroll++) {
+      const elements = fetchUiHierarchy(serial);
+      found = elements.find(el =>
+        (el.text && el.text.toLowerCase().includes(query)) ||
+        (el.desc && el.desc.toLowerCase().includes(query)) ||
+        (el.id && el.id.toLowerCase().includes(query))
+      );
+
+      if (found) {
+        console.log(`🎯 Found matching element: [${found.index}] "${found.text || found.desc}" at Center: (${found.center[0]}, ${found.center[1]})`);
+        if (shouldTap) {
+          adbExec(serial, `shell input tap ${found.center[0]} ${found.center[1]}`);
+          console.log(`👆 Automatically tapped (${found.center[0]}, ${found.center[1]})`);
+        }
+        process.exit(0);
+      }
+
+      if (scroll < maxScrolls) {
+        console.log(`📜 Element not visible on current screen. Scrolling down (${scroll + 1}/${maxScrolls})...`);
+        adbExec(serial, 'shell input swipe 720 2200 720 800 350');
+        spawnSync('sleep', ['1.2']);
+      }
+    }
+
+    console.error(`❌ Element matching "${query}" was not found after ${maxScrolls} scrolls.`);
+    process.exit(1);
+    break;
+  }
+
+  case 'clear': {
+    const serial = resolveSerial(targetSerial);
+    console.log(`🧹 Clearing focused text input on ${serial}...`);
+    // Move to end and delete 50 times
+    adbExec(serial, 'shell input keyevent 123'); // KEYCODE_MOVE_END
+    const delKeys = Array(45).fill('67').join(' '); // KEYCODE_DEL
+    adbExec(serial, `shell input keyevent ${delKeys}`);
+    console.log('✅ Input cleared.');
+    break;
+  }
+
+  case 'notifications': {
+    const serial = resolveSerial(targetSerial);
+    try {
+      const dump = adbExec(serial, 'shell dumpsys notification --noredact 2>/dev/null || adb shell dumpsys notification');
+      const lines = dump.split('\n');
+      const notifs = [];
+      let current = null;
+
+      for (const line of lines) {
+        const pkgMatch = line.match(/pkg=([^\s]+)/);
+        if (pkgMatch) {
+          if (current && (current.title || current.text)) notifs.push(current);
+          current = { pkg: pkgMatch[1], title: '', text: '' };
+        }
+        if (current) {
+          const tMatch = line.match(/android\.title=String \((.*?)\)/);
+          if (tMatch) current.title = tMatch[1];
+          const txtMatch = line.match(/android\.text=String \((.*?)\)/);
+          if (txtMatch) current.text = txtMatch[1];
+        }
+      }
+      if (current && (current.title || current.text)) notifs.push(current);
+
+      if (filteredArgs.includes('--json')) {
+        console.log(JSON.stringify(notifs.slice(0, 15), null, 2));
+      } else {
+        console.log(`\n🔔 Active Notifications on ${serial} (${notifs.length} found):`);
+        for (const n of notifs.slice(0, 10)) {
+          console.log(`  - [${n.pkg}] ${n.title ? n.title + ': ' : ''}${n.text}`);
+        }
+      }
+    } catch (e) {
+      console.error('❌ Failed to fetch notifications:', e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case 'tap': {
+    const serial = resolveSerial(targetSerial);
+    const arg1 = filteredArgs[1];
+    const arg2 = filteredArgs[2];
+
+    if (!arg1) {
+      console.error('❌ Usage: galaxy-emu tap <index | "label" | x y> [-s serial]');
+      process.exit(1);
+    }
+
+    if (arg1 && arg2 && !isNaN(parseInt(arg1, 10)) && !isNaN(parseInt(arg2, 10))) {
+      adbExec(serial, `shell input tap ${arg1} ${arg2}`);
+      console.log(`👆 Tapped coordinates (${arg1}, ${arg2}) on ${serial}`);
+      break;
+    }
+
+    let elements = [];
+    try {
+      if (fs.existsSync(UI_CACHE_FILE)) {
+        const cached = JSON.parse(fs.readFileSync(UI_CACHE_FILE, 'utf8'));
+        if (cached.serial === serial && Date.now() - cached.timestamp < 15000) {
+          elements = cached.elements;
+        }
+      }
+    } catch {}
+
+    if (elements.length === 0) elements = fetchUiHierarchy(serial);
+
+    const targetIdx = parseInt(arg1, 10);
+    if (!isNaN(targetIdx)) {
+      const match = elements.find(el => el.index === targetIdx);
+      if (!match) {
+        console.error(`❌ Index [${targetIdx}] not found. Run \`galaxy-emu uidump\` to view current elements.`);
+        process.exit(1);
+      }
+      const [cx, cy] = match.center;
+      adbExec(serial, `shell input tap ${cx} ${cy}`);
+      const label = match.text || match.desc || match.id || `Index ${targetIdx}`;
+      console.log(`👆 Smart Tapped [${targetIdx}] ${label} at (${cx}, ${cy}) on ${serial}`);
+      break;
+    }
+
+    const query = arg1.toLowerCase();
+    const match = elements.find(el => 
+      (el.text && el.text.toLowerCase().includes(query)) ||
+      (el.desc && el.desc.toLowerCase().includes(query)) ||
+      (el.id && el.id.toLowerCase().includes(query))
+    );
+
+    if (!match) {
+      console.error(`❌ Element matching "${arg1}" not found. Run \`galaxy-emu uidump\` to refresh items.`);
+      process.exit(1);
+    }
+
+    const [cx, cy] = match.center;
+    adbExec(serial, `shell input tap ${cx} ${cy}`);
+    const foundLabel = match.text || match.desc || match.id;
+    console.log(`👆 Smart Tapped "${foundLabel}" at (${cx}, ${cy}) on ${serial}`);
     break;
   }
 
@@ -280,9 +441,22 @@ switch (command) {
       console.error('❌ Usage: galaxy-emu type "<text>" [-s serial]');
       process.exit(1);
     }
-    const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
-    adbExec(serial, `shell input text "${encoded}"`);
-    console.log(`⌨️ Typed "${text}" on ${serial}`);
+
+    const hasUnicode = /[^\x00-\x7F]/.test(text);
+    if (hasUnicode) {
+      try {
+        execSync(`echo -n "${text.replace(/"/g, '\\"')}" | pbcopy`);
+        adbExec(serial, 'shell input keyevent 279');
+        console.log(`⌨️ [Unicode/Korean] Typed "${text}" via clipboard paste on ${serial}`);
+      } catch (e) {
+        const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
+        adbExec(serial, `shell input text "${encoded}"`);
+      }
+    } else {
+      const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
+      adbExec(serial, `shell input text "${encoded}"`);
+      console.log(`⌨️ [ASCII] Typed "${text}" on ${serial}`);
+    }
     break;
   }
 
@@ -300,10 +474,11 @@ switch (command) {
       TAB: 61,
       ESCAPE: 111,
       SPACE: 62,
+      PASTE: 279,
     };
     const code = KEY_MAP[keyName] || parseInt(keyName, 10);
     if (!code) {
-      console.error(`❌ Unknown key name: ${keyName}. Supported: ${Object.keys(KEY_MAP).join(', ')}`);
+      console.error(`❌ Unknown key: ${keyName}. Supported: ${Object.keys(KEY_MAP).join(', ')}`);
       process.exit(1);
     }
     adbExec(serial, `shell input keyevent ${code}`);
@@ -314,7 +489,7 @@ switch (command) {
   case 'current': {
     const serial = resolveSerial(targetSerial);
     const focus = adbExec(serial, "shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").trim();
-    console.log(`📍 Current Foreground Activity on ${serial}:\n${focus}`);
+    console.log(`📍 Current Foreground on ${serial}:\n${focus}`);
     break;
   }
 
