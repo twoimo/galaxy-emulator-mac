@@ -273,7 +273,28 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
     .screen-toast { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%) translateY(8px); background: rgba(15,23,42,0.95); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 5px 12px; border-radius: 20px; font-size: 10px; opacity: 0; transition: all 0.25s ease; pointer-events: none; z-index: 30; white-space: nowrap; }
     .screen-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
     .nav-bar { height: 22px; display: flex; justify-content: center; align-items: center; background: #050b14; }
-    .gesture-bar { width: 80px; height: 3px; background: rgba(255,255,255,0.5); border-radius: 2px; }
+    .gesture-bar { width: 80px; height: 4px; background: rgba(255,255,255,0.6); border-radius: 2px; cursor: pointer; transition: background 0.15s; }
+    .gesture-bar:hover { background: #fff; }
+    /* OS Page Navigation */
+    .os-page { display: none; width: 100%; height: 100%; flex-direction: column; box-sizing: border-box; }
+    .os-page.active { display: flex; }
+    /* YouTube View */
+    .app-header-yt { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px; font-weight: 700; font-size: 13px; color: #ff0000; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    .close-app { color: #94a3b8; cursor: pointer; font-size: 13px; padding: 2px 6px; border-radius: 4px; }
+    .close-app:hover { color: #fff; background: rgba(255,255,255,0.1); }
+    .yt-video-box { width: 100%; height: 130px; background: #000; border-radius: 8px; margin: 8px 0; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+    .yt-play-btn { width: 36px; height: 36px; background: #ff0000; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 16px; color: #fff; box-shadow: 0 4px 12px rgba(255,0,0,0.4); }
+    .yt-title-bar { position: absolute; bottom: 6px; left: 8px; font-size: 9px; color: #e2e8f0; font-weight: 500; }
+    .yt-feed { display: flex; flex-direction: column; gap: 8px; overflow-y: auto; flex: 1; padding-top: 4px; }
+    .yt-card { display: flex; gap: 8px; align-items: center; background: rgba(255,255,255,0.05); padding: 6px; border-radius: 6px; }
+    .yt-thumb { width: 50px; height: 32px; background: #334155; border-radius: 4px; flex-shrink: 0; }
+    .yt-meta { flex: 1; overflow: hidden; }
+    .yt-t1 { font-size: 9px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #f8fafc; }
+    .yt-t2 { font-size: 8px; color: #94a3b8; }
+    /* Chrome View */
+    .app-header-chrome { display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.08); padding: 4px 10px; border-radius: 14px; font-size: 10px; color: #cbd5e1; }
+    .chrome-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+    .chrome-search { background: rgba(255,255,255,0.1); border-radius: 20px; padding: 6px 14px; font-size: 10px; color: #94a3b8; width: 80%; }
     .info-panel { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 12px; height: var(--phone-h); box-sizing: border-box; }
     .panel-header { border-bottom: 1px solid var(--border); padding-bottom: 6px; display: flex; justify-content: space-between; align-items: flex-end; }
     .panel-title { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
@@ -314,30 +335,55 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
   <div class="container">
     <div class="phone-mockup">
       <div class="camera-hole"></div>
-      <div class="status-bar"><span>18:25</span><span>5G · 100% 🔋</span></div>
-      <div class="screen-content">
-        <div class="mode-badge" id="screenBadge"><span class="pulse-dot"></span><span id="screenBadgeText">AVD EMULATOR · ARM64</span></div>
-        <div class="clock-widget"><div class="clock-time">18:25</div><div class="clock-date">Mon, Oct 19 · Seoul 21°C Clear</div></div>
-        <div class="search-bar"><span>Search apps & web...</span><span>🎙️ 📷</span></div>
-        <div class="app-grid">
-          <div class="app-item" data-app="Play Store"><div class="app-icon bg-play">▶</div><span class="app-label">Play Store</span></div>
-          <div class="app-item" data-app="Chrome"><div class="app-icon bg-chrome">🌐</div><span class="app-label">Chrome</span></div>
-          <div class="app-item" data-app="YouTube"><div class="app-icon bg-yt">▶</div><span class="app-label">YouTube</span></div>
-          <div class="app-item" data-app="Maps"><div class="app-icon bg-maps">📍</div><span class="app-label">Maps</span></div>
-          <div class="app-item" data-app="Galaxy Tools"><div class="app-icon bg-galaxy">G</div><span class="app-label">Galaxy</span></div>
-          <div class="app-item" data-app="Photos"><div class="app-icon bg-photos">🖼️</div><span class="app-label">Photos</span></div>
-          <div class="app-item" data-app="Files"><div class="app-icon bg-files">📁</div><span class="app-label">Files</span></div>
-          <div class="app-item" data-app="Terminal"><div class="app-icon bg-terminal">&gt;_</div><span class="app-label">ADB Term</span></div>
+      <div class="status-bar"><span>18:30</span><span>5G · 100% 🔋</span></div>
+      <div class="screen-content" id="screenContent">
+        <!-- Home Screen Page -->
+        <div id="pageHome" class="os-page active">
+          <div class="clock-widget"><div class="clock-time">18:30</div><div class="clock-date">Mon, Oct 19 · Seoul 21°C Clear</div></div>
+          <div class="search-bar"><span>Search apps & web...</span><span>🎙️ 📷</span></div>
+          <div class="app-grid">
+            <div class="app-item" data-app="youtube"><div class="app-icon bg-yt">▶</div><span class="app-label">YouTube</span></div>
+            <div class="app-item" data-app="chrome"><div class="app-icon bg-chrome">🌐</div><span class="app-label">Chrome</span></div>
+            <div class="app-item" data-app="play"><div class="app-icon bg-play">▶</div><span class="app-label">Play Store</span></div>
+            <div class="app-item" data-app="maps"><div class="app-icon bg-maps">📍</div><span class="app-label">Maps</span></div>
+            <div class="app-item" data-app="photos"><div class="app-icon bg-photos">🖼️</div><span class="app-label">Photos</span></div>
+            <div class="app-item" data-app="settings"><div class="app-icon bg-settings">⚙️</div><span class="app-label">Settings</span></div>
+            <div class="app-item" data-app="files"><div class="app-icon bg-files">📁</div><span class="app-label">Files</span></div>
+            <div class="app-item" data-app="term"><div class="app-icon bg-terminal">&gt;_</div><span class="app-label">ADB Term</span></div>
+          </div>
+          <div class="dock-area">
+            <div class="app-item" data-app="phone"><div class="app-icon bg-phone">📞</div></div>
+            <div class="app-item" data-app="msg"><div class="app-icon bg-msg">💬</div></div>
+            <div class="app-item" data-app="chrome"><div class="app-icon bg-chrome">🌐</div></div>
+            <div class="app-item" data-app="camera"><div class="app-icon bg-camera">📷</div></div>
+          </div>
         </div>
-        <div class="dock-area">
-          <div class="app-item" data-app="Phone"><div class="app-icon bg-phone">📞</div></div>
-          <div class="app-item" data-app="Messages"><div class="app-icon bg-msg">💬</div></div>
-          <div class="app-item" data-app="Camera"><div class="app-icon bg-camera">📷</div></div>
-          <div class="app-item" data-app="Settings"><div class="app-icon bg-settings">⚙️</div></div>
+
+        <!-- YouTube In-app Page -->
+        <div id="pageYoutube" class="os-page">
+          <div class="app-header-yt"><span>▶ YouTube</span><span id="btnCloseYt" class="close-app">✕</span></div>
+          <div class="yt-video-box">
+            <div class="yt-play-btn">▶</div>
+            <div class="yt-title-bar">Android on Apple Silicon · M5 Max 120Hz Demo</div>
+          </div>
+          <div class="yt-feed">
+            <div class="yt-card"><div class="yt-thumb"></div><div class="yt-meta"><div class="yt-t1">Samsung Galaxy S24 Ultra Long-term Review</div><div class="yt-t2">Android Central · 482K views</div></div></div>
+            <div class="yt-card"><div class="yt-thumb"></div><div class="yt-meta"><div class="yt-t1">Building Agents with Aside & OpenCode</div><div class="yt-t2">Tech Lab · 120K views</div></div></div>
+          </div>
         </div>
+
+        <!-- Chrome In-app Page -->
+        <div id="pageChrome" class="os-page">
+          <div class="app-header-chrome"><span>google.com</span><span id="btnCloseChrome" class="close-app">✕</span></div>
+          <div class="chrome-body">
+            <div style="font-size: 26px; font-weight: 800; color: #4285f4; margin: 30px 0 10px;">Google</div>
+            <div class="chrome-search">Search Google or type URL</div>
+          </div>
+        </div>
+
         <div id="phoneToast" class="screen-toast">App Launched</div>
       </div>
-      <div class="nav-bar"><div class="gesture-bar"></div></div>
+      <div class="nav-bar"><div class="gesture-bar" id="gestureHome" title="Swipe or click for Home"></div></div>
     </div>
 
     <div class="info-panel">
@@ -405,18 +451,41 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
       body.appendChild(line);
       body.scrollTop = body.scrollHeight;
     }
+    function showPage(pageId) {
+      document.querySelectorAll('.os-page').forEach(p => p.classList.remove('active'));
+      const target = document.getElementById(pageId);
+      if (target) target.classList.add('active');
+    }
+
     document.querySelectorAll('.app-item').forEach(item => {
       item.addEventListener('click', () => {
-        const name = item.getAttribute('data-app');
-        showToast('Open ' + name);
-        appendLog('info', 'am_start', 'Starting intent: ' + name);
+        const app = item.getAttribute('data-app');
+        showToast('Launching ' + app.toUpperCase());
+        appendLog('info', 'am_start', 'Intent: android.intent.action.MAIN (' + app + ')');
+        if (app === 'youtube') showPage('pageYoutube');
+        else if (app === 'chrome') showPage('pageChrome');
       });
     });
+
+    const btnCloseYt = document.getElementById('btnCloseYt');
+    if (btnCloseYt) btnCloseYt.addEventListener('click', () => showPage('pageHome'));
+
+    const btnCloseChrome = document.getElementById('btnCloseChrome');
+    if (btnCloseChrome) btnCloseChrome.addEventListener('click', () => showPage('pageHome'));
+
+    const gestureHome = document.getElementById('gestureHome');
+    if (gestureHome) gestureHome.addEventListener('click', () => {
+      showToast('Home');
+      showPage('pageHome');
+      appendLog('adbd', 'input', 'keyevent: KEYCODE_HOME');
+    });
+
     document.querySelectorAll('.key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const key = btn.getAttribute('data-key');
         showToast(key + ' Key');
         appendLog('adbd', 'input', 'keyevent: ' + key);
+        if (key === 'Home') showPage('pageHome');
       });
     });
     const tabAvd = document.getElementById('tabAvd');
