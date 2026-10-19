@@ -3,10 +3,12 @@
 const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
-const UI_CACHE_FILE = '/tmp/galaxy-emu-ui.json';
+// One tap-by-index cache per device, so a uidump on one device cannot replace another's.
+const uiCacheFile = serial => path.join(os.tmpdir(), `galaxy-emu-ui-${encodeURIComponent(serial)}.json`);
 const SOM_BIN = path.join(ROOT_DIR, 'bin', 'som-drawer');
 const OCR_BIN = path.join(ROOT_DIR, 'bin', 'ocr-extract');
 const STATE_FILE = '/tmp/galaxy-emu-state.json';
@@ -439,7 +441,7 @@ function fetchUiHierarchy(serial) {
   adbRun(serial, ['shell', 'uiautomator', 'dump', tempPath]);
   const xml = adbTry(serial, ['shell', 'cat', tempPath]);
   if (!xml.includes('<hierarchy')) {
-    try { fs.unlinkSync(UI_CACHE_FILE); } catch {}
+    try { fs.unlinkSync(uiCacheFile(serial)); } catch {}
     throw new Error('uiautomator dump wrote no hierarchy (the screen may never go idle, e.g. video playback). Use `galaxy-emu ocr` or `screenshot` instead.');
   }
 
@@ -492,7 +494,7 @@ function fetchUiHierarchy(serial) {
   elements = deduped;
 
   try {
-    fs.writeFileSync(UI_CACHE_FILE, JSON.stringify({ serial, timestamp: Date.now(), elements }), 'utf8');
+    fs.writeFileSync(uiCacheFile(serial), JSON.stringify({ serial, timestamp: Date.now(), elements }), 'utf8');
   } catch {}
 
   return elements;
@@ -1152,8 +1154,8 @@ switch (command) {
 
     let elements = [];
     try {
-      if (fs.existsSync(UI_CACHE_FILE)) {
-        const cached = JSON.parse(fs.readFileSync(UI_CACHE_FILE, 'utf8'));
+      if (fs.existsSync(uiCacheFile(serial))) {
+        const cached = JSON.parse(fs.readFileSync(uiCacheFile(serial), 'utf8'));
         if (cached.serial === serial && Date.now() - cached.timestamp < 15000) {
           elements = cached.elements;
         }
