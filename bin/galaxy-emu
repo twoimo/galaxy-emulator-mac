@@ -140,19 +140,23 @@ function tapAt(serial, x, y) {
   adbRun(serial, ['shell', 'input', 'tap', xs, ys]);
 }
 
-// ASCII goes through `input text`. Anything else is pasted from the Mac clipboard.
-// There is no fallback: `input text` cannot type non-ASCII characters.
+// ASCII goes through `input text`. `input text` cannot type anything else, and adb has no way to
+// set the device clipboard (the emulator only syncs the Mac clipboard in a windowed session with
+// clipboard sharing on), so non-ASCII text goes through the ADBKeyBoard IME when it is the active
+// keyboard, and fails otherwise.
+const ADB_KEYBOARD_IME = 'com.android.adbkeyboard/.AdbIME';
 function typeText(serial, text) {
   if (hasControlChars(text)) {
     throw new Error('type does not accept control characters such as newlines. Use `galaxy-emu key ENTER` between lines.');
   }
   if (/[^\x00-\x7F]/.test(text)) {
-    const copied = spawnSync('pbcopy', [], { input: text });
-    if (copied.error || copied.status !== 0) {
-      throw new Error(`pbcopy failed (${copied.error ? copied.error.message : `exit ${copied.status}`}), so nothing was typed`);
+    const ime = adbTry(serial, ['shell', 'settings', 'get', 'secure', 'default_input_method']).trim();
+    if (ime !== ADB_KEYBOARD_IME) {
+      throw new Error(`non-ASCII text needs the ADBKeyBoard IME as the active keyboard (current: ${ime || 'unknown'}), so nothing was typed. ` +
+        `Install it from https://github.com/senzhk/ADBKeyBoard, then run: adb shell ime enable ${ADB_KEYBOARD_IME} && adb shell ime set ${ADB_KEYBOARD_IME}`);
     }
-    adbRun(serial, ['shell', 'input', 'keyevent', '279']);
-    return 'clipboard';
+    adbRun(serial, ['shell', 'am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', Buffer.from(text, 'utf8').toString('base64')]);
+    return 'adbkeyboard';
   }
   adbRun(serial, ['shell', 'input', 'text', shQuote(text.replace(/ /g, '%s'))]);
   return 'ascii';
@@ -512,7 +516,7 @@ Smart Actions (Zero Coordinate Guessing):
   tap <index | "label" | x y>     Smart tap by index ([3]), text ("YouTube"), or coordinate
   find "<text>" [--tap]           Scroll-until-found: auto-scroll until target element appears
   clear                           Clear text in currently focused input field completely
-  type "<text>"                   Full Unicode/Korean typing (auto-routes via clipboard)
+  type "<text>"                   Type text (Unicode/Korean needs the ADBKeyBoard IME)
   swipe <x1> <y1> <x2> <y2> [ms]  Swipe/scroll between coordinates
   key <NAME>                      Send keyevent: HOME, BACK, POWER, ENTER, APP_SWITCH, VOL_UP
 
@@ -1217,7 +1221,7 @@ switch (command) {
       console.error(`❌ ${String(e.message).split('\n')[0]}`);
       process.exit(1);
     }
-    if (mode === 'clipboard') console.log(`⌨️ [Unicode/Korean] Typed "${text}" via clipboard paste on ${serial}`);
+    if (mode === 'adbkeyboard') console.log(`⌨️ [Unicode/Korean] Sent "${text}" to ADBKeyBoard on ${serial}`);
     else console.log(`⌨️ [ASCII] Typed "${text}" on ${serial}`);
     maybeRecord(serial, 'type', { text }, null);
     break;
