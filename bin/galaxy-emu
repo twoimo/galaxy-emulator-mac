@@ -945,6 +945,11 @@ switch (command) {
             || els.find(e => (e.text || '').toLowerCase().includes(q))
             || els.find(e => (e.desc || '').toLowerCase().includes(q));
           if (!resolved) {
+            if (dry) {
+              console.log(`   ⚠ step ${st.n}: "${st.elementLabel}" is not on the CURRENT screen.`);
+              console.log('     dry-run does not simulate navigation, so this may still succeed on a real replay.');
+              continue;
+            }
             diverged = { step: st.n, reason: `element "${st.elementLabel}" not found on current screen` };
             console.log(`   ❌ step ${st.n}: ${diverged.reason}`);
             break;

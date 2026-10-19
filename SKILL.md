@@ -212,23 +212,68 @@ swiftc -O scripts/ocr_overlay.swift -o bin/ocr-extract  # Vision OCR extractor
 
 ## Verification status (measured, 2026-10-19)
 
-Device: `emulator-5554` (Android 14, arm64-v8a, 1440×3120 @505dpi, Apple M5 Max); physical `SM-S928N` (Android 16) over Tailscale.
+### Automated regression suite
 
-| Feature | Evidence |
+`tests/regression.sh` exercises every command and asserts on real output.
+
+```bash
+tests/regression.sh -s emulator-5554
+```
+
+**Result: 46 passed, 0 failed, 0 skipped** on `emulator-5554`
+(Android 14, arm64-v8a, 1440x3120 @505dpi, Apple M5 Max).
+
+| Section | Checks |
 |---|---|
-| `uidump` indexed/tap | 15 elements; `tap "YouTube"` opened it |
-| `uidump` compaction | web page 328 raw → 82 usable nodes |
-| `ocr` fallback | 44 text lines from a screen where the tree exposed 7 (browser chrome only) |
-| `ocr "<text>" --tap` | matched "정치 경제" at (167,569), 100% confidence, tapped |
-| `state` | hash stable across probes; `repeat: 3` raised LOOP WARNING |
-| Injection defense | English + Korean payloads flagged `⚠UNTRUSTED`; benign lines clean |
-| Offline handling | dead serial now exits with recovery steps, no stack trace |
-| `find --tap`, `clear`, `type` (Korean), `notifications`, `som` | all re-verified after changes |
-| `diagnose` | screen-off detected (`Asleep`), `--fix` woke it and re-check confirmed `Awake`; keyboard overlay detected and hidden |
-| `toast` | transient frame discriminator isolated 3 overlay frames for the volume panel; a real 3s snackbar yielded its text `저장이 완료되었습니다` |
-| `trace` | 3-step flow recorded with hashes, dry-run re-resolved the label, real replay reproduced it; a deliberately broken label stopped at step 2 with exit 1 |
-| `memory` | set/get/list round-trip verified |
+| A. discovery & transport | `devices`, `devices --json`, `current`, `diagnose` |
+| B. observation | `uidump` (+json, untrusted header), `screenshot`, `som`, `ocr`, `notifications` |
+| C. actions | `tap` by label/index/coordinate, `swipe`, `key`, `find`, `type`, `clear` |
+| D. safety | untrusted-UI marking present |
+| E. state | changed → no-change → `LOOP WARNING` on third identical probe |
+| F. transient UI | a real 3-second snackbar yielded its text `저장이 완료되었습니다` |
+| G. learning | `trace` start/stop/show/list/replay dry-run/rm, `memory` set/get/list/rm |
+| G2. extra | `ocr … --tap` on rendered web content, `diagnose --fix`, `app start` (URL + component), `app stop` |
+| H. errors | unknown serial exits 1 with a recovery message |
 
-### Not verified in this session
+### Physical device (read-only, no taps)
 
-- `crash_or_anr_dialog` auto-dismiss and `app_crash`/`app_anr` logcat branches: `am crash` is a no-op on this emulator build, so no crash dialog could be synthesized. The detection patterns are implemented but were not exercised against a real crash.
+On a real Galaxy `SM-S928N` over Tailscale while locked:
+
+- `current` → `NotificationShade`
+- `diagnose` → correctly reported `locked` (keyguard) + `screen_off` (Dozing)
+- `uidump --json` → 53 elements
+- `screenshot` → written
+- `state` → hashed
+
+Destructive actions were deliberately not run against the personal phone.
+
+### Crash / ANR (previously unverified, now verified)
+
+A throwaway APK (`CrashActivity` throwing in `onCreate`, plus a blocking `Runnable`) was built with
+aapt2 + d8 + apksigner and injected into the emulator:
+
+| Check | Result |
+|---|---|
+| crash log | `app_crash` reported from `FATAL EXCEPTION … Process: com.twoimo.crashtest` |
+| crash dialog | `Application Error: com.twoimo.crashtest` detected |
+| ANR log | `app_anr` from `ANR in …` (input dispatch timeout 5004 ms) |
+| ANR dialog | `Application Not Responding: …` detected |
+| auto-dismiss | `--fix` tapped **Close app**, dialog gone, verified by window dump |
+
+Bug found by this test: the dialog regex looked for `ApplicationError` while real window titles are
+`Application Error` / `Application Not Responding` (spaced). Fixed. The test APK was removed afterwards.
+
+### Not exercised
+
+- `mirror` (scrcpy window) is not part of the automated suite; it opens a desktop window.
+- `boot` / `stop` are not in the suite because they restart the emulator mid-run.
+
+### Performance (Apple M5 Max, `Galaxy_S24_Ultra`)
+
+| Metric | Before | After |
+|---|---|---|
+| Cold boot to `sys.boot_completed=1` | 20 s | 16 s |
+| Guest RAM | 8.0 GB | 3.8 GB |
+| Host RSS idle | 6.4 GB | 6.4 GB |
+| Host RSS with Instagram + Chrome | up to 10.6 GB | 6.8 GB |
+| OOM / lmkd kills | - | none |
