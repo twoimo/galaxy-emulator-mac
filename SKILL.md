@@ -148,121 +148,235 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Galaxy S24 Ultra Live Telemetry & Logcat</title>
+  <title>Galaxy S24 Ultra - Virtual AVD & Physical Device Switcher</title>
   <style>
-    :root { --phone-w: 260px; --phone-h: 585px; }
-    body { margin: 0; padding: 12px 0; font-family: var(--font-sans, system-ui); color: var(--foreground); display: flex; justify-content: center; background: transparent; }
-    .container { display: flex; flex-wrap: wrap; gap: 20px; align-items: stretch; max-width: 760px; width: 100%; }
-    .phone-mockup { width: var(--phone-w); height: var(--phone-h); background: var(--surface-primary, #1e1e1e); border-radius: 36px; border: 3.5px solid var(--border, #333); box-shadow: 0 12px 32px rgba(0,0,0,0.2); position: relative; display: flex; flex-direction: column; overflow: hidden; flex-shrink: 0; }
-    .camera-hole { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 10px; height: 10px; background: #000; border-radius: 50%; z-index: 10; }
-    .status-bar { height: 26px; padding: 6px 14px 0; display: flex; justify-content: space-between; font-size: 10px; font-weight: 600; color: var(--muted-foreground); font-variant-numeric: tabular-nums; z-index: 5; }
-    .screen-content { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; text-align: center; background: linear-gradient(180deg, rgba(0,0,0,0.02) 0%, rgba(0,0,0,0.18) 100%); }
-    .app-icon-badge { width: 52px; height: 52px; background: #fae100; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; color: #371d1e; margin-bottom: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
-    .app-title { font-size: 14px; font-weight: 600; margin-bottom: 2px; }
-    .app-sub { font-size: 11px; color: var(--muted-foreground); margin-bottom: 14px; }
-    .state-pill { display: inline-flex; align-items: center; gap: 6px; background: color-mix(in oklab, var(--chart-1) 15%, transparent); color: var(--chart-1); padding: 3px 8px; border-radius: 16px; font-size: 10px; font-weight: 600; }
-    .pulse-dot { width: 6px; height: 6px; background: var(--chart-1); border-radius: 50%; box-shadow: 0 0 6px var(--chart-1); }
-    .nav-bar { height: 30px; display: flex; justify-content: space-around; align-items: center; font-size: 12px; color: var(--muted-foreground); padding-bottom: 2px; }
+    :root {
+      --phone-w: 260px;
+      --phone-h: 585px;
+    }
+    body {
+      margin: 0;
+      padding: 12px 0;
+      font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto);
+      color: var(--foreground);
+      display: flex;
+      justify-content: center;
+      background: transparent;
+    }
+    .container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+      align-items: stretch;
+      max-width: 760px;
+      width: 100%;
+    }
+    .phone-mockup {
+      width: var(--phone-w);
+      height: var(--phone-h);
+      background: #050b14;
+      border-radius: 36px;
+      border: 3.5px solid var(--border);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.12);
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      color: #fff;
+    }
+    .camera-hole {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 10px;
+      height: 10px;
+      background: #000;
+      border-radius: 50%;
+      z-index: 20;
+      box-shadow: 0 0 2px rgba(255,255,255,0.25);
+    }
+    .status-bar {
+      height: 24px;
+      padding: 6px 14px 0;
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.85);
+      font-variant-numeric: tabular-nums;
+      z-index: 15;
+    }
+    .screen-content {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: radial-gradient(circle at 50% 30%, #1e293b 0%, #090d16 100%);
+      display: flex;
+      flex-direction: column;
+      padding: 10px 14px;
+      box-sizing: border-box;
+      justify-content: space-between;
+    }
+    .mode-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 20px;
+      padding: 2px 8px;
+      font-size: 9px;
+      font-weight: 700;
+      color: #38bdf8;
+      align-self: flex-start;
+      margin-bottom: 8px;
+    }
+    .pulse-dot {
+      width: 5px;
+      height: 5px;
+      background: #38bdf8;
+      border-radius: 50%;
+      box-shadow: 0 0 6px #38bdf8;
+      animation: pulse 2s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+    }
+    .clock-widget { text-align: center; margin: 8px 0 14px; }
+    .clock-time { font-size: 40px; font-weight: 300; letter-spacing: -0.04em; line-height: 1; color: #f8fafc; font-variant-numeric: tabular-nums; }
+    .clock-date { font-size: 11px; color: #94a3b8; margin-top: 4px; }
+    .search-bar { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.12); border-radius: 24px; padding: 6px 12px; display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: #cbd5e1; margin-bottom: 16px; backdrop-filter: blur(10px); }
+    .app-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px 6px; text-align: center; }
+    .app-item { display: flex; flex-direction: column; align-items: center; gap: 4px; cursor: pointer; user-select: none; transition: transform 0.1s; }
+    .app-item:hover { transform: scale(1.06); }
+    .app-icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 17px; box-shadow: 0 4px 8px rgba(0,0,0,0.3); }
+    .app-label { font-size: 9px; color: #e2e8f0; max-width: 46px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .bg-play { background: linear-gradient(135deg, #00c9ff, #92fe9d); color: #0f172a; }
+    .bg-chrome { background: linear-gradient(135deg, #ea4335, #fbbc05, #34a853, #4285f4); color: #fff; }
+    .bg-maps { background: linear-gradient(135deg, #34a853, #4285f4); color: #fff; }
+    .bg-yt { background: #ff0000; color: #fff; }
+    .bg-settings { background: #475569; color: #f8fafc; }
+    .bg-photos { background: linear-gradient(135deg, #ff758c, #ff7eb3); color: #fff; }
+    .bg-files { background: #0284c7; color: #fff; }
+    .bg-terminal { background: #1e293b; border: 1px solid #475569; color: #38bdf8; font-family: var(--font-mono); font-weight: 700; font-size: 13px; }
+    .bg-phone { background: #22c55e; color: #fff; }
+    .bg-msg { background: #3b82f6; color: #fff; }
+    .bg-camera { background: #0f172a; border: 1px solid #334155; color: #fff; }
+    .bg-galaxy { background: linear-gradient(135deg, #6366f1, #a855f7); color: #fff; font-weight: 800; }
+    .dock-area { background: rgba(255,255,255,0.08); border-radius: 18px; padding: 8px 6px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; backdrop-filter: blur(12px); margin-top: auto; }
+    .screen-toast { position: absolute; bottom: 60px; left: 50%; transform: translateX(-50%) translateY(8px); background: rgba(15,23,42,0.95); border: 1px solid rgba(255,255,255,0.2); color: #fff; padding: 5px 12px; border-radius: 20px; font-size: 10px; opacity: 0; transition: all 0.25s ease; pointer-events: none; z-index: 30; white-space: nowrap; }
+    .screen-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .nav-bar { height: 22px; display: flex; justify-content: center; align-items: center; background: #050b14; }
+    .gesture-bar { width: 80px; height: 3px; background: rgba(255,255,255,0.5); border-radius: 2px; }
     .info-panel { flex: 1; min-width: 320px; display: flex; flex-direction: column; gap: 12px; height: var(--phone-h); box-sizing: border-box; }
     .panel-header { border-bottom: 1px solid var(--border); padding-bottom: 6px; display: flex; justify-content: space-between; align-items: flex-end; }
     .panel-title { font-size: 17px; font-weight: 600; letter-spacing: -0.02em; }
     .panel-sub { font-size: 11px; color: var(--muted-foreground); }
-    .chip-live { font-size: 10px; font-weight: 700; color: var(--success, #10b981); background: color-mix(in oklab, var(--success, #10b981) 15%, transparent); padding: 2px 6px; border-radius: 4px; }
+    .device-tabs { display: flex; background: var(--muted); padding: 2px; border-radius: var(--radius); gap: 2px; }
+    .dev-tab { flex: 1; text-align: center; padding: 5px 8px; font-size: 11px; font-weight: 600; border-radius: calc(var(--radius) - 2px); cursor: pointer; user-select: none; color: var(--muted-foreground); transition: all 0.15s; }
+    .dev-tab.active { background: var(--surface-primary); color: var(--foreground); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
     .data-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-    .data-box { background: var(--surface-primary); border: 1px solid var(--border); border-radius: var(--radius, 6px); padding: 6px 8px; }
+    .data-box { background: var(--surface-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 8px; }
     .data-label { font-size: 10px; color: var(--muted-foreground); margin-bottom: 2px; }
-    .data-value { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
-    .mem-row { display: flex; flex-direction: column; gap: 4px; background: var(--surface-primary); border: 1px solid var(--border); border-radius: var(--radius, 6px); padding: 8px 10px; }
-    .mem-header { display: flex; justify-content: space-between; font-size: 11px; font-weight: 500; }
-    .mem-header span:last-child { color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
-    .progress-track { width: 100%; height: 6px; background: var(--muted); border-radius: 3px; overflow: hidden; }
-    .progress-fill { height: 100%; background: var(--chart-1); border-radius: 3px; }
+    .data-value { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .spec-card { background: var(--surface-primary); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: flex; flex-direction: column; gap: 4px; }
+    .spec-row { display: flex; justify-content: space-between; font-size: 11px; }
+    .spec-row span:first-child { color: var(--muted-foreground); }
+    .spec-row span:last-child { font-weight: 600; font-variant-numeric: tabular-nums; }
     .actions-box { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius, 6px); font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: var(--surface-primary); color: var(--foreground); cursor: pointer; text-decoration: none; }
+    .btn { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 7px 10px; border-radius: var(--radius); font-size: 11px; font-weight: 500; border: 1px solid var(--border); background: var(--surface-primary); color: var(--foreground); cursor: pointer; text-decoration: none; transition: background 0.15s, transform 0.05s; user-select: none; box-sizing: border-box; }
     .btn:hover { background: var(--muted); }
     .btn-primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
-    .console-card { flex: 1; background: var(--surface-secondary); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius, 8px); display: flex; flex-direction: column; overflow: hidden; min-height: 180px; }
-    .console-header { background: var(--muted); padding: 6px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font-size: 11px; font-family: var(--font-mono, monospace); }
+    .console-card { flex: 1; background: var(--surface-secondary); color: var(--foreground); border: 1px solid var(--border); border-radius: var(--radius); display: flex; flex-direction: column; overflow: hidden; min-height: 160px; }
+    .console-header { background: var(--muted); padding: 5px 10px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font-size: 11px; font-family: var(--font-mono); }
     .mac-dots { display: flex; gap: 5px; }
     .mac-dot { width: 8px; height: 8px; border-radius: 50%; }
-    .dot-r { background: var(--destructive, #ef4444); } .dot-y { background: var(--chart-4, #eab308); } .dot-g { background: var(--success, #10b981); }
+    .dot-r { background: var(--destructive); } .dot-y { background: var(--chart-4); } .dot-g { background: var(--success); }
     .console-title { font-size: 10px; color: var(--muted-foreground); }
-    .console-tools { display: flex; gap: 6px; }
-    .tag-filter { font-size: 9px; background: var(--surface-primary); border: 1px solid var(--border); padding: 1px 5px; border-radius: 3px; color: var(--muted-foreground); cursor: pointer; }
-    .tag-filter.active { background: var(--chart-1); color: var(--primary-foreground, #fff); border-color: var(--chart-1); }
-    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.6; overflow-y: auto; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; background: var(--surface-secondary); }
-    .console-body::-webkit-scrollbar { height: 4px; width: 4px; }
-    .console-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono); font-size: 10px; line-height: 1.6; overflow-y: auto; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; background: var(--surface-secondary); }
     .log-line { display: block; margin-bottom: 2px; white-space: nowrap; }
     .log-time { color: var(--muted-foreground); margin-right: 6px; }
     .log-info { color: var(--chart-1); font-weight: 600; margin-right: 4px; }
-    .log-warn { color: var(--chart-4, #eab308); font-weight: 600; margin-right: 4px; }
-    .log-err  { color: var(--destructive); font-weight: 600; margin-right: 4px; }
     .log-adbd { color: var(--success); font-weight: 600; margin-right: 4px; }
-    .log-tag  { color: var(--chart-2, #8b5cf6); margin-right: 6px; }
+    .log-tag  { color: var(--chart-2); margin-right: 6px; }
     .quick-keys { display: flex; gap: 6px; padding: 4px 8px; background: var(--muted); border-top: 1px solid var(--border); }
-    .key-btn { flex: 1; background: var(--surface-primary); border: 1px solid var(--border); color: var(--foreground); border-radius: 4px; font-size: 10px; padding: 3px 0; text-align: center; cursor: pointer; }
+    .key-btn { flex: 1; background: var(--surface-primary); border: 1px solid var(--border); color: var(--foreground); border-radius: 4px; font-size: 10px; padding: 3px 0; text-align: center; cursor: pointer; font-family: var(--font-sans); user-select: none; }
     .key-btn:hover { background: var(--accent); color: var(--accent-foreground); }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- Phone Mockup -->
     <div class="phone-mockup">
       <div class="camera-hole"></div>
-      <div class="status-bar"><span>18:16</span><span>89% 🔋</span></div>
+      <div class="status-bar"><span>18:25</span><span>5G · 100% 🔋</span></div>
       <div class="screen-content">
-        <div class="app-icon-badge">TALK</div>
-        <div class="app-title">KakaoTalk</div>
-        <div class="app-sub">ChatRoomHolderActivity</div>
-        <div class="state-pill"><span class="pulse-dot"></span>Tailscale Connected</div>
-        <div id="phoneToast" class="screen-toast">Key Event Sent</div>
+        <div class="mode-badge" id="screenBadge"><span class="pulse-dot"></span><span id="screenBadgeText">AVD EMULATOR · ARM64</span></div>
+        <div class="clock-widget"><div class="clock-time">18:25</div><div class="clock-date">Mon, Oct 19 · Seoul 21°C Clear</div></div>
+        <div class="search-bar"><span>Search apps & web...</span><span>🎙️ 📷</span></div>
+        <div class="app-grid">
+          <div class="app-item" data-app="Play Store"><div class="app-icon bg-play">▶</div><span class="app-label">Play Store</span></div>
+          <div class="app-item" data-app="Chrome"><div class="app-icon bg-chrome">🌐</div><span class="app-label">Chrome</span></div>
+          <div class="app-item" data-app="YouTube"><div class="app-icon bg-yt">▶</div><span class="app-label">YouTube</span></div>
+          <div class="app-item" data-app="Maps"><div class="app-icon bg-maps">📍</div><span class="app-label">Maps</span></div>
+          <div class="app-item" data-app="Galaxy Tools"><div class="app-icon bg-galaxy">G</div><span class="app-label">Galaxy</span></div>
+          <div class="app-item" data-app="Photos"><div class="app-icon bg-photos">🖼️</div><span class="app-label">Photos</span></div>
+          <div class="app-item" data-app="Files"><div class="app-icon bg-files">📁</div><span class="app-label">Files</span></div>
+          <div class="app-item" data-app="Terminal"><div class="app-icon bg-terminal">&gt;_</div><span class="app-label">ADB Term</span></div>
+        </div>
+        <div class="dock-area">
+          <div class="app-item" data-app="Phone"><div class="app-icon bg-phone">📞</div></div>
+          <div class="app-item" data-app="Messages"><div class="app-icon bg-msg">💬</div></div>
+          <div class="app-item" data-app="Camera"><div class="app-icon bg-camera">📷</div></div>
+          <div class="app-item" data-app="Settings"><div class="app-icon bg-settings">⚙️</div></div>
+        </div>
+        <div id="phoneToast" class="screen-toast">App Launched</div>
       </div>
-      <div class="nav-bar"><span>|||</span><span>●</span><span>&lt;</span></div>
+      <div class="nav-bar"><div class="gesture-bar"></div></div>
     </div>
 
-    <!-- Right Telemetry & Debug Console -->
     <div class="info-panel">
+      <div class="device-tabs">
+        <div id="tabAvd" class="dev-tab active">🤖 Android AVD Emulator</div>
+        <div id="tabReal" class="dev-tab">📱 실물 Galaxy S24 Ultra</div>
+      </div>
       <div class="panel-header">
         <div>
-          <div class="panel-title">Samsung Galaxy S24 Ultra</div>
-          <div class="panel-sub">Model SM-S928N · One UI / Android 16</div>
+          <div class="panel-title" id="panelTitle">Galaxy S24 Ultra AVD</div>
+          <div class="panel-sub" id="panelSub">Apple Silicon Native · Android 14 (API 34)</div>
         </div>
-        <div class="chip-live">● LIVE ADB</div>
+        <div class="chip-live" id="panelChip">● ARM64 NATIVE</div>
       </div>
-
       <div class="data-grid">
-        <div class="data-box"><div class="data-label">Battery</div><div class="data-value">89% · 28.1°C</div></div>
-        <div class="data-box"><div class="data-label">Display</div><div class="data-value">Dozing (Off)</div></div>
+        <div class="data-box"><div class="data-label">Host Engine</div><div class="data-value" id="valHost">Hypervisor (M5)</div></div>
+        <div class="data-box"><div class="data-label">GPU Mode</div><div class="data-value" id="valGpu">Metal (Host)</div></div>
         <div class="data-box"><div class="data-label">Resolution</div><div class="data-value">1440 × 3120</div></div>
-        <div class="data-box"><div class="data-label">Network</div><div class="data-value">Tailscale TLS</div></div>
+        <div class="data-box"><div class="data-label">Pixel Density</div><div class="data-value">505 dpi</div></div>
       </div>
-
-      <div class="mem-row">
-        <div class="mem-header"><span>LPDDR5X Memory Load</span><span>9.1 GB / 11.3 GB (80%)</span></div>
-        <div class="progress-track"><div class="progress-fill" style="width: 80.6%;"></div></div>
+      <div class="spec-card">
+        <div class="spec-row"><span>Target Architecture</span><span id="specArch">ARM64-v8a (Zero emulation overhead)</span></div>
+        <div class="spec-row"><span>Allocated Memory</span><span id="specRam">8,192 MB (6 vCPU)</span></div>
+        <div class="spec-row"><span>Relay / Streaming</span><span style="color: var(--success);" id="specRelay">Ready (tapflow port 3000)</span></div>
       </div>
-
-      <!-- Execution Action Buttons -->
       <div class="actions-box">
-        <button id="btnScrcpy" class="btn btn-primary">🖥️ scrcpy 단독 창 (60fps)</button>
-        <a id="btnTapflow" href="http://localhost:3000" target="_blank" class="btn">🌐 tapflow 브라우저 탭 (연결됨)</a>
+        <button id="btnLaunchEmu" class="btn btn-primary">⚡ AVD 단독 창 실행 (galaxy-emu)</button>
+        <a id="btnTapflow" href="http://localhost:3000" target="_blank" class="btn">🌐 tapflow 웹 스트리밍 탭</a>
       </div>
-
-      <!-- Theme-Adaptive Logcat Console Window -->
       <div class="console-card">
         <div class="console-header">
           <div class="mac-dots"><span class="mac-dot dot-r"></span><span class="mac-dot dot-y"></span><span class="mac-dot dot-g"></span></div>
-          <span class="console-title">adb logcat (Live Stream)</span>
-          <div class="console-tools">
-            <span class="tag-filter active" data-filter="all">ALL</span>
-            <span class="tag-filter" data-filter="err">ERR/WARN</span>
-            <span class="tag-filter" data-filter="adbd">ADBD</span>
-          </div>
+          <span class="console-title">Emulator Host Console & Logcat</span>
+          <div class="console-tools"><span class="tag-filter active">ALL</span><span class="tag-filter">ADBD</span></div>
         </div>
         <div class="console-body" id="consoleBody">
-          <span class="log-line log-type-adbd"><span class="log-time">18:16:10.967</span><span class="log-adbd">[I]</span><span class="log-tag">tapflow</span>Relay running on http://localhost:3000 (SM-S928N Connected)</span>
-          <span class="log-line log-type-info"><span class="log-time">18:16:10.624</span><span class="log-info">[I]</span><span class="log-tag">android-agent</span>streaming via scrcpy H.264 pipeline</span>
+          <span class="log-line"><span class="log-time">18:25:01.120</span><span class="log-info">[I]</span><span class="log-tag">emulator</span>Hypervisor.framework vCPU thread created: 6 cores</span>
+          <span class="log-line"><span class="log-time">18:25:01.145</span><span class="log-info">[I]</span><span class="log-tag">renderer</span>Metal Host GPU pipeline initialized (1440x3120@120Hz)</span>
+          <span class="log-line"><span class="log-time">18:25:01.210</span><span class="log-adbd">[I]</span><span class="log-tag">tapflow</span>Relay running on http://localhost:3000</span>
         </div>
         <div class="quick-keys">
           <div class="key-btn" data-key="Home">⌂ Home</div>
@@ -286,39 +400,65 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
       if (!body) return;
       const time = new Date().toTimeString().split(' ')[0] + '.' + String(Date.now() % 1000).padStart(3, '0');
       const line = document.createElement('span');
-      line.className = `log-line log-type-${type}`;
+      line.className = 'log-line';
       line.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">[${type.toUpperCase()}]</span><span class="log-tag">${tag}</span>${msg}`;
       body.appendChild(line);
       body.scrollTop = body.scrollHeight;
     }
+    document.querySelectorAll('.app-item').forEach(item => {
+      item.addEventListener('click', () => {
+        const name = item.getAttribute('data-app');
+        showToast('Open ' + name);
+        appendLog('info', 'am_start', 'Starting intent: ' + name);
+      });
+    });
     document.querySelectorAll('.key-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const key = btn.getAttribute('data-key');
-        showToast(key + ' Key Pressed');
-        appendLog('adbd', 'input', 'keyevent triggered: ' + key);
+        showToast(key + ' Key');
+        appendLog('adbd', 'input', 'keyevent: ' + key);
       });
     });
-    document.querySelectorAll('.tag-filter').forEach(tab => {
-      tab.addEventListener('click', () => {
-        document.querySelectorAll('.tag-filter').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        const filter = tab.getAttribute('data-filter');
-        document.querySelectorAll('.log-line').forEach(l => {
-          if (filter === 'all') l.classList.remove('hidden');
-          else if (filter === 'err') l.classList.toggle('hidden', !l.classList.contains('log-type-warn') && !l.classList.contains('log-type-err'));
-          else if (filter === 'adbd') l.classList.toggle('hidden', !l.classList.contains('log-type-adbd'));
-        });
-      });
+    const tabAvd = document.getElementById('tabAvd');
+    const tabReal = document.getElementById('tabReal');
+    tabAvd.addEventListener('click', () => {
+      tabAvd.classList.add('active');
+      tabReal.classList.remove('active');
+      document.getElementById('screenBadgeText').textContent = 'AVD EMULATOR · ARM64';
+      document.getElementById('panelTitle').textContent = 'Galaxy S24 Ultra AVD';
+      document.getElementById('panelSub').textContent = 'Apple Silicon Native · Android 14 (API 34)';
+      document.getElementById('panelChip').textContent = '● ARM64 NATIVE';
+      document.getElementById('valHost').textContent = 'Hypervisor (M5)';
+      document.getElementById('valGpu').textContent = 'Metal (Host)';
+      document.getElementById('specArch').textContent = 'ARM64-v8a (Zero emulation overhead)';
+      document.getElementById('specRam').textContent = '8,192 MB (6 vCPU)';
+      document.getElementById('btnLaunchEmu').textContent = '⚡ AVD 단독 창 실행 (galaxy-emu)';
+      showToast('Switched to AVD Emulator');
+      appendLog('info', 'switch', 'active profile: Galaxy_S24_Ultra.avd');
     });
-    const btnScrcpy = document.getElementById('btnScrcpy');
-    if (btnScrcpy) btnScrcpy.addEventListener('click', () => {
-      showToast('scrcpy Launching...');
-      appendLog('adbd', 'scrcpy', 'spawn: scrcpy --turn-screen-off --stay-awake');
+    tabReal.addEventListener('click', () => {
+      tabReal.classList.add('active');
+      tabAvd.classList.remove('active');
+      document.getElementById('screenBadgeText').textContent = 'SM-S928N · TAILSCALE';
+      document.getElementById('panelTitle').textContent = 'Physical Galaxy S24 Ultra';
+      document.getElementById('panelSub').textContent = 'Model SM-S928N · One UI / Android 16';
+      document.getElementById('panelChip').textContent = '● REAL DEVICE';
+      document.getElementById('valHost').textContent = 'Qualcomm 8 Gen 3';
+      document.getElementById('valGpu').textContent = 'Adreno 750';
+      document.getElementById('specArch').textContent = 'Physical Device (Knox Vault Active)';
+      document.getElementById('specRam').textContent = '12 GB LPDDR5X (80% used)';
+      document.getElementById('btnLaunchEmu').textContent = '🖥️ scrcpy 실물 폰 미러링';
+      showToast('Switched to Real Galaxy');
+      appendLog('adbd', 'switch', 'connected to SM-S928N over Tailscale');
     });
-    const btnTapflow = document.getElementById('btnTapflow');
-    if (btnTapflow) btnTapflow.addEventListener('click', () => {
-      showToast('tapflow Connecting...');
-      appendLog('adbd', 'tapflow', 'connecting to ws://localhost:3000/stream');
+    document.getElementById('btnLaunchEmu').addEventListener('click', () => {
+      if (tabAvd.classList.contains('active')) {
+        showToast('Running: galaxy-emu run s24u');
+        appendLog('adbd', 'exec', 'galaxy-emu run s24u -gpu host');
+      } else {
+        showToast('Running: scrcpy --turn-screen-off');
+        appendLog('adbd', 'exec', 'scrcpy -s 100.109.128.97:39547');
+      }
     });
   </script>
 </body>
