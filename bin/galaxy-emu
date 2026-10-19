@@ -8,6 +8,7 @@ const ROOT_DIR = path.resolve(__dirname, '..');
 
 const extraPaths = [
   '/opt/homebrew/bin',
+  '/Applications/Tailscale.app/Contents/MacOS',
   path.join(process.env.HOME, 'Library/Android/sdk/platform-tools'),
   path.join(process.env.HOME, 'Library/Android/sdk/emulator'),
   path.join(process.env.HOME, 'Library/Android/sdk/cmdline-tools/latest/bin'),
@@ -57,6 +58,7 @@ function resolveSerial(explicitSerial) {
   const list = getConnectedDevices();
   if (list.length === 0) {
     console.error('❌ Error: No Android device or emulator is currently connected via ADB.');
+    console.error('👉 Tip: Run `galaxy-emu connect` for physical phone or `galaxy-emu boot s24u` for AVD.');
     process.exit(1);
   }
   const emu = list.find(d => d.type === 'emulator');
@@ -71,27 +73,34 @@ function adbExec(serial, cmd) {
 
 function printHelp() {
   console.log(`
-🌌 Galaxy Emulator & Device Control CLI (Agent-First)
-======================================================
+🌌 Galaxy Unified Control CLI (Agent-First: Physical + AVD)
+============================================================
 Usage: galaxy-emu <command> [options] [-s <serial>]
 
-Target & Device:
-  devices [--json]                List all connected physical devices and running emulators
+Connectivity & Targeting (Physical & Network):
+  devices [--json]                List connected physical phones and running emulators
+  connect [ip:port]               Auto-discover and connect physical Galaxy via Tailscale
+  disconnect [serial]             Disconnect wireless ADB transport
+  mirror [-s serial]              Launch 60fps scrcpy mirroring window (screen-off mode)
+
+Virtual Machine Lifecycle (AVD):
+  boot [profile] [--headless]     Boot local ARM64 AVD (default: s24u) and wait for readiness
+  stop [serial|all]               Gracefully shut down emulator instance
+  create <profile>                Create Galaxy AVD profile (s24u, flip5)
+
+Observation Loop (LLM Vision & UI Parsing):
+  screenshot [output.png]         Capture full-resolution screenshot to file
+  uidump [--json]                 Extract all clickable UI elements with center tap coordinates
   current                         Get active focused foreground package & activity
-  mirror [-s serial]              Launch 60fps scrcpy mirroring window (screen-off)
 
-Observation (Observation Loop):
-  screenshot [output.png]         Capture high-res screen and save to path
-  uidump [--json]                 Dump clickable UI hierarchy with bounds [x1,y1][x2,y2]
-
-Touch & Key Actions:
+Action Execution (Touch, Keys, Typing):
   tap <x> <y>                     Tap exact screen coordinates
   swipe <x1> <y1> <x2> <y2> [ms]  Swipe/scroll between coordinates
-  type "<text>"                   Type string into currently focused input
+  type "<text>"                   Type text into focused input (auto-escaped)
   key <NAME>                      Send keyevent: HOME, BACK, POWER, ENTER, APP_SWITCH, VOL_UP, VOL_DOWN
 
 App Management:
-  app start <package/act | URL>   Launch app component or open web URL in browser
+  app start <package/act | URL>   Launch app component or open URL in browser
   app stop <package>              Force-stop target package
   install <apk-path>              Install or update APK on target device
 `);
@@ -104,10 +113,76 @@ switch (command) {
       console.log(JSON.stringify(list, null, 2));
     } else {
       console.log('\n📱 Connected Android Devices & Emulators:');
-      for (const d of list) {
-        console.log(`  - [${d.type.toUpperCase()}] ${d.model} (${d.serial})`);
+      if (list.length === 0) {
+        console.log('  (No active devices found. Run `galaxy-emu connect` or `galaxy-emu boot s24u`)');
+      } else {
+        for (const d of list) {
+          console.log(`  - [${d.type.toUpperCase()}] ${d.model} (${d.serial})`);
+        }
       }
     }
+    break;
+  }
+
+  case 'connect': {
+    let targetEndpoint = filteredArgs[1];
+    if (!targetEndpoint) {
+      console.log('🔍 Looking for active Android devices in Tailnet...');
+      try {
+        const tsOut = execSync('tailscale status 2>/dev/null', { encoding: 'utf8' });
+        const tsLines = tsOut.split('\n');
+        for (const line of tsLines) {
+          if (line.includes('android') && (line.includes('active') || line.includes('idle'))) {
+            const ip = line.trim().split(/\s+/)[0];
+            if (ip) {
+              // Check if already connected on some port
+              const devList = getConnectedDevices();
+              const existing = devList.find(d => d.serial.startsWith(ip));
+              if (existing) {
+                console.log(`✅ Physical device is already connected via ADB: ${existing.serial}`);
+                process.exit(0);
+              }
+              targetEndpoint = `${ip}:5555`;
+              console.log(`📍 Found Tailscale Galaxy: ${ip} -> Trying default port 5555...`);
+              break;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!targetEndpoint) {
+      console.error('❌ Could not auto-detect active Tailscale Android device.');
+      console.error('👉 Usage: galaxy-emu connect <ip:port>');
+      process.exit(1);
+    }
+
+    console.log(`🔌 Connecting to ${targetEndpoint}...`);
+    try {
+      const res = execSync(`adb connect ${targetEndpoint}`, { encoding: 'utf8' }).trim();
+      console.log(res);
+      if (res.includes('connected to')) {
+        console.log(`🎉 Successfully connected to ${targetEndpoint}!`);
+      } else {
+        console.warn(`⚠️ adb connect returned: ${res}`);
+      }
+    } catch (e) {
+      console.error('❌ Failed to connect:', e.message);
+      process.exit(1);
+    }
+    break;
+  }
+
+  case 'disconnect': {
+    const serial = targetSerial || filteredArgs[1];
+    if (!serial) {
+      console.log('🔌 Disconnecting all wireless ADB connections...');
+      execSync('adb disconnect');
+    } else {
+      console.log(`🔌 Disconnecting ${serial}...`);
+      execSync(`adb disconnect ${serial}`);
+    }
+    console.log('✅ Disconnected.');
     break;
   }
 
@@ -161,7 +236,7 @@ switch (command) {
         console.log(JSON.stringify({ serial, count: elements.length, elements }, null, 2));
       } else {
         console.log(`\n🔍 Interactive UI Elements on ${serial} (${elements.length} found):`);
-        for (const el of elements.slice(0, 25)) {
+        for (const el of elements.slice(0, 30)) {
           const label = el.text ? `"${el.text}"` : (el.desc ? `[${el.desc}]` : el.id);
           console.log(`  - ${label.padEnd(35)} Center: (${el.center[0]}, ${el.center[1]}) Bounds: ${el.bounds}`);
         }
@@ -269,8 +344,66 @@ switch (command) {
     break;
   }
 
+  case 'boot': {
+    const profile = filteredArgs[1] || 's24u';
+    const headless = filteredArgs.includes('--headless');
+    const avdName = profile === 'flip5' ? 'Galaxy_Z_Flip5' : 'Galaxy_S24_Ultra';
+
+    console.log(`🚀 Booting ${avdName} (headless: ${headless})...`);
+    const flags = ['-avd', avdName, '-gpu', 'host'];
+    if (headless) flags.push('-no-window');
+
+    const proc = spawn('emulator', flags, { detached: true, stdio: 'ignore' });
+    proc.unref();
+
+    console.log('⏳ Waiting for emulator to appear on ADB...');
+    let onlineSerial = null;
+    for (let i = 0; i < 20; i++) {
+      const list = getConnectedDevices().filter(d => d.type === 'emulator');
+      if (list.length > 0) {
+        onlineSerial = list[0].serial;
+        break;
+      }
+      spawnSync('sleep', ['2']);
+    }
+
+    if (!onlineSerial) {
+      console.error('❌ Timeout waiting for emulator to connect to ADB.');
+      process.exit(1);
+    }
+
+    console.log(`📲 Detected ${onlineSerial}. Waiting for Android OS boot_completed...`);
+    for (let i = 0; i < 30; i++) {
+      try {
+        const booted = execSync(`adb -s ${onlineSerial} shell getprop sys.boot_completed`, { encoding: 'utf8' }).trim();
+        if (booted === '1') {
+          console.log(`🎉 Emulator ${onlineSerial} is fully booted and ready for commands!`);
+          process.exit(0);
+        }
+      } catch {}
+      spawnSync('sleep', ['2']);
+    }
+    console.warn('⚠️ Emulator is online, but sys.boot_completed took longer than expected.');
+    break;
+  }
+
+  case 'stop': {
+    const serial = resolveSerial(targetSerial);
+    if (serial.startsWith('emulator-')) {
+      console.log(`🛑 Shutting down emulator ${serial}...`);
+      adbExec(serial, 'emu kill');
+      console.log('✅ Emulator stopped.');
+    } else {
+      console.log(`ℹ️ Target ${serial} is a physical device. Disconnecting ADB...`);
+      execSync(`adb disconnect ${serial}`);
+      console.log('✅ Disconnected.');
+    }
+    break;
+  }
+
   case 'mirror': {
     const serial = resolveSerial(targetSerial);
+    console.log(`🖥️ Launching scrcpy for ${serial} (screen-off mode)...`);
     spawn('scrcpy', [
       '-s', serial,
       '--turn-screen-off',
@@ -278,7 +411,7 @@ switch (command) {
       '--window-title', `Galaxy (${serial})`,
       '--always-on-top',
     ], { detached: true, stdio: 'ignore' }).unref();
-    console.log(`🖥️ scrcpy launched for ${serial}`);
+    console.log('✅ scrcpy running in background on macOS desktop.');
     break;
   }
 
