@@ -87,15 +87,26 @@ Verified: a test page containing both an English and a Korean injection payload 
 
 ```bash
 galaxy-emu tap 6                  # by uidump index
-galaxy-emu tap "YouTube"          # by text / content-desc
+galaxy-emu tap "YouTube"          # by text / content-desc / id: exact match first, then a unique substring; ambiguity is an error
 galaxy-emu tap 720 1560           # by coordinate
 galaxy-emu ocr "정치" --tap        # find on screen via OCR, then tap
 galaxy-emu find "Settings" --tap  # scroll (≤6 screens) until found, then tap
 galaxy-emu swipe 720 2200 720 800 350
-galaxy-emu type "검색어"           # Korean/Unicode auto-routes via clipboard paste
+galaxy-emu type "검색어"           # Korean/Unicode needs the ADBKeyBoard IME (see below)
 galaxy-emu clear                  # wipe the focused input
 galaxy-emu key HOME|BACK|POWER|ENTER|APP_SWITCH|VOL_UP|VOL_DOWN|PASTE
 ```
+
+`type` sends ASCII with `input text`. `input text` cannot type Korean or other non-ASCII text, and adb cannot set the device clipboard, so non-ASCII text needs [ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard) as the active keyboard:
+
+```bash
+adb install ADBKeyboard.apk
+adb shell ime enable com.android.adbkeyboard/.AdbIME
+adb shell ime set com.android.adbkeyboard/.AdbIME
+```
+
+Without it, `type` exits with an error for non-ASCII text instead of reporting success.
+On a windowed emulator with clipboard sharing on, `type "검색어" --paste` (or `GALAXY_EMU_PASTE=1`) copies the text to the Mac clipboard and sends the paste key instead. Delivery is not verified; check the field with `uidump`.
 
 `uidump` filters zero-area/off-screen nodes and de-duplicates repeats, so a web page that yields 328 raw nodes reports ~82 usable ones.
 
