@@ -187,8 +187,8 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
     .mac-dot { width: 8px; height: 8px; border-radius: 50%; }
     .dot-r { background: #ff5f56; } .dot-y { background: #ffbd2e; } .dot-g { background: #27c93f; }
     .console-title { font-size: 10px; color: #94a3b8; }
-    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.5; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
-    .log-line { display: block; margin-bottom: 2px; }
+    .console-body { flex: 1; padding: 8px 10px; font-family: var(--font-mono, monospace); font-size: 10px; line-height: 1.6; overflow-y: auto; overflow-x: auto; white-space: nowrap; scrollbar-width: thin; }
+    .log-line { display: block; margin-bottom: 2px; white-space: nowrap; }
     .log-time { color: #64748b; margin-right: 6px; }
     .log-info { color: #38bdf8; }
     .log-warn { color: #facc15; }
