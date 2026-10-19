@@ -205,6 +205,74 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
     .key-btn:hover { background: var(--accent); color: var(--accent-foreground); }
   </style>
 </head>
+<body>
+  <div class="container">
+    <!-- Phone Mockup -->
+    <div class="phone-mockup">
+      <div class="camera-hole"></div>
+      <div class="status-bar"><span>18:16</span><span>89% 🔋</span></div>
+      <div class="screen-content">
+        <div class="app-icon-badge">TALK</div>
+        <div class="app-title">KakaoTalk</div>
+        <div class="app-sub">ChatRoomHolderActivity</div>
+        <div class="state-pill"><span class="pulse-dot"></span>Tailscale Connected</div>
+        <div id="phoneToast" class="screen-toast">Key Event Sent</div>
+      </div>
+      <div class="nav-bar"><span>|||</span><span>●</span><span>&lt;</span></div>
+    </div>
+
+    <!-- Right Telemetry & Debug Console -->
+    <div class="info-panel">
+      <div class="panel-header">
+        <div>
+          <div class="panel-title">Samsung Galaxy S24 Ultra</div>
+          <div class="panel-sub">Model SM-S928N · One UI / Android 16</div>
+        </div>
+        <div class="chip-live">● LIVE ADB</div>
+      </div>
+
+      <div class="data-grid">
+        <div class="data-box"><div class="data-label">Battery</div><div class="data-value">89% · 28.1°C</div></div>
+        <div class="data-box"><div class="data-label">Display</div><div class="data-value">Dozing (Off)</div></div>
+        <div class="data-box"><div class="data-label">Resolution</div><div class="data-value">1440 × 3120</div></div>
+        <div class="data-box"><div class="data-label">Network</div><div class="data-value">Tailscale TLS</div></div>
+      </div>
+
+      <div class="mem-row">
+        <div class="mem-header"><span>LPDDR5X Memory Load</span><span>9.1 GB / 11.3 GB (80%)</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width: 80.6%;"></div></div>
+      </div>
+
+      <!-- Execution Action Buttons -->
+      <div class="actions-box">
+        <button id="btnScrcpy" class="btn btn-primary">🖥️ scrcpy 단독 창 (60fps)</button>
+        <a id="btnTapflow" href="http://localhost:3000" target="_blank" class="btn">🌐 tapflow 브라우저 탭 (연결됨)</a>
+      </div>
+
+      <!-- Theme-Adaptive Logcat Console Window -->
+      <div class="console-card">
+        <div class="console-header">
+          <div class="mac-dots"><span class="mac-dot dot-r"></span><span class="mac-dot dot-y"></span><span class="mac-dot dot-g"></span></div>
+          <span class="console-title">adb logcat (Live Stream)</span>
+          <div class="console-tools">
+            <span class="tag-filter active" data-filter="all">ALL</span>
+            <span class="tag-filter" data-filter="err">ERR/WARN</span>
+            <span class="tag-filter" data-filter="adbd">ADBD</span>
+          </div>
+        </div>
+        <div class="console-body" id="consoleBody">
+          <span class="log-line log-type-adbd"><span class="log-time">18:16:10.967</span><span class="log-adbd">[I]</span><span class="log-tag">tapflow</span>Relay running on http://localhost:3000 (SM-S928N Connected)</span>
+          <span class="log-line log-type-info"><span class="log-time">18:16:10.624</span><span class="log-info">[I]</span><span class="log-tag">android-agent</span>streaming via scrcpy H.264 pipeline</span>
+        </div>
+        <div class="quick-keys">
+          <div class="key-btn" data-key="Home">⌂ Home</div>
+          <div class="key-btn" data-key="Back">↩ Back</div>
+          <div class="key-btn" data-key="Power">⚡ Power</div>
+          <div class="key-btn" data-key="Screencap">📸 Screencap</div>
+        </div>
+      </div>
+    </div>
+  </div>
   <script>
     function showToast(text) {
       const toast = document.getElementById('phoneToast');
