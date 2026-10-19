@@ -87,7 +87,7 @@ Verified: a test page containing both an English and a Korean injection payload 
 
 ```bash
 galaxy-emu tap 6                  # by uidump index
-galaxy-emu tap "YouTube"          # by text / content-desc
+galaxy-emu tap "YouTube"          # by text / content-desc / id: exact match first, then a unique substring; ambiguity is an error
 galaxy-emu tap 720 1560           # by coordinate
 galaxy-emu ocr "정치" --tap        # find on screen via OCR, then tap
 galaxy-emu find "Settings" --tap  # scroll (≤6 screens) until found, then tap

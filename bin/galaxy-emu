@@ -1177,17 +1177,24 @@ switch (command) {
       break;
     }
 
-    const query = arg1.toLowerCase();
-    const match = elements.find(el => 
-      (el.text && el.text.toLowerCase().includes(query)) ||
-      (el.desc && el.desc.toLowerCase().includes(query)) ||
-      (el.id && el.id.toLowerCase().includes(query))
-    );
+    // Exact label (text, content-desc, or resource-id, ignoring case) first; a substring only when
+    // nothing matches exactly. More than one candidate is reported instead of guessing.
+    const query = arg1.trim().toLowerCase();
+    const fields = el => [el.text, el.desc, el.id].filter(Boolean).map(v => v.trim().toLowerCase());
+    const exact = elements.filter(el => fields(el).some(v => v === query));
+    const candidates = exact.length ? exact : elements.filter(el => fields(el).some(v => v.includes(query)));
 
-    if (!match) {
+    if (candidates.length === 0) {
       console.error(`❌ Element matching "${arg1}" not found. Run \`galaxy-emu uidump\` to refresh items.`);
       process.exit(1);
     }
+    if (candidates.length > 1) {
+      console.error(`❌ "${arg1}" matches ${candidates.length} elements${exact.length ? ' exactly' : ' (no exact match)'}; nothing tapped. Tap one by index:`);
+      for (const el of candidates) console.error(`  [${el.index}] ${uiLabel(el)}`);
+      process.exit(1);
+    }
+    const match = candidates[0];
+    if (!exact.length) console.log(`ℹ️ No exact match for "${arg1}"; tapping the only element that contains it.`);
 
     const [cx, cy] = match.center;
     tapAt(serial, cx, cy);
