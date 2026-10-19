@@ -106,6 +106,7 @@ adb shell ime set com.android.adbkeyboard/.AdbIME
 ```
 
 Without it, `type` exits with an error for non-ASCII text instead of reporting success.
+On a windowed emulator with clipboard sharing on, `type "검색어" --paste` (or `GALAXY_EMU_PASTE=1`) copies the text to the Mac clipboard and sends the paste key instead. Delivery is not verified; check the field with `uidump`.
 
 `uidump` filters zero-area/off-screen nodes and de-duplicates repeats, so a web page that yields 328 raw nodes reports ~82 usable ones.
 
