@@ -174,18 +174,32 @@ function sendViaAdbKeyboard(serial, text) {
 // The keyboard to switch back to is written to disk before the switch and removed after it, so a
 // run that is killed or fails to switch back leaves a record the next `type` uses to finish the job.
 const imeRestoreFile = serial => path.join(CFG_DIR, `ime-restore-${encodeURIComponent(serial)}`);
+const dropImeRestore = serial => { try { fs.unlinkSync(imeRestoreFile(serial)); } catch {} };
+const IME_ID = /^[A-Za-z0-9_.]+\/[A-Za-z0-9_.]+$/;
 function pendingImeRestore(serial) {
-  try { return fs.readFileSync(imeRestoreFile(serial), 'utf8').trim(); } catch { return ''; }
+  let saved;
+  try { saved = fs.readFileSync(imeRestoreFile(serial), 'utf8').trim(); } catch { return ''; }
+  if (IME_ID.test(saved)) return saved;
+  dropImeRestore(serial);
+  return '';
+}
+
+function restoreIme(serial, saved, note) {
+  if (setImeAndWait(serial, saved) !== true) {
+    throw new Error(`RESTORE FAILED: could not switch the default keyboard back to ${saved} after selecting ADBKeyBoard. Run: adb shell ime set ${saved}${note}`);
+  }
+  dropImeRestore(serial);
 }
 
 function typeWithSwitchedIme(serial, text, saved) {
-  if (!saved || saved === 'null' || hasControlChars(saved)) {
+  if (!IME_ID.test(saved)) {
     throw new Error(`cannot read the current default keyboard (got ${JSON.stringify(saved)}), so ADBKeyBoard was not selected and nothing was typed`);
   }
   ensureCfg();
   fs.writeFileSync(imeRestoreFile(serial), saved, 'utf8');
   const set = setImeAndWait(serial, ADB_KEYBOARD_IME);
   if (set !== true) {
+    if (defaultIme(serial) !== ADB_KEYBOARD_IME) dropImeRestore(serial);
     throw new Error(`could not select ADBKeyBoard (${typeof set === 'string' ? set : 'default_input_method did not change'}), so nothing was typed. ` +
       `If it is not enabled (Android 14 reports "Unknown input method"), run: ${ENABLE_ADB_KEYBOARD_HINT} && adb shell ime enable ${ADB_KEYBOARD_IME}`);
   }
@@ -195,11 +209,7 @@ function typeWithSwitchedIme(serial, text, saved) {
   } catch (e) {
     sendError = e;
   } finally {
-    if (setImeAndWait(serial, saved) !== true) {
-      throw new Error(`RESTORE FAILED: could not switch the default keyboard back to ${saved} after selecting ADBKeyBoard. Run: adb shell ime set ${saved}` +
-        (sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : '. The text WAS sent, so do not type it again; the next non-ASCII type retries the switch back'));
-    }
-    try { fs.unlinkSync(imeRestoreFile(serial)); } catch {}
+    restoreIme(serial, saved, sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : '. The text WAS sent, so do not type it again; the next type retries the switch back');
   }
   if (sendError) throw sendError;
 }
@@ -207,9 +217,10 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
   if (hasControlChars(text)) {
     throw new Error('type does not accept control characters such as newlines. Use `galaxy-emu key ENTER` between lines.');
   }
+  const record = pendingImeRestore(serial);
   if (/[^\x00-\x7F]/.test(text)) {
     const ime = defaultIme(serial);
-    const pending = ime === ADB_KEYBOARD_IME ? pendingImeRestore(serial) : '';
+    const pending = ime === ADB_KEYBOARD_IME ? record : '';
     if (ime === ADB_KEYBOARD_IME && !pending) {
       sendViaAdbKeyboard(serial, text);
       return 'adbkeyboard';
@@ -232,6 +243,8 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
       `Install it from https://github.com/senzhk/ADBKeyBoard and enable it: adb shell ime enable ${ADB_KEYBOARD_IME}. ` +
       'Or, on a windowed emulator with clipboard sharing on, pass --paste (or set GALAXY_EMU_PASTE=1) to paste from the Mac clipboard.');
   }
+  if (record && defaultIme(serial) === ADB_KEYBOARD_IME) restoreIme(serial, record, '. Nothing was typed');
+  else if (record) dropImeRestore(serial);
   adbRun(serial, ['shell', 'input', 'text', shQuote(text.replace(/ /g, '%s'))]);
   return 'ascii';
 }
