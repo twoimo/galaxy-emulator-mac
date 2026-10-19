@@ -205,8 +205,54 @@ When emitting the visual card in Aside, use this exact structure in a \`\`\`visu
     .key-btn:hover { background: var(--accent); color: var(--accent-foreground); }
   </style>
 </head>
-<body>
-  <!-- Container with mockup + telemetry + logcat -->
+  <script>
+    function showToast(text) {
+      const toast = document.getElementById('phoneToast');
+      if (!toast) return;
+      toast.textContent = text;
+      toast.classList.add('show');
+      setTimeout(() => toast.classList.remove('show'), 1500);
+    }
+    function appendLog(type, tag, msg) {
+      const body = document.getElementById('consoleBody');
+      if (!body) return;
+      const time = new Date().toTimeString().split(' ')[0] + '.' + String(Date.now() % 1000).padStart(3, '0');
+      const line = document.createElement('span');
+      line.className = `log-line log-type-${type}`;
+      line.innerHTML = `<span class="log-time">${time}</span><span class="log-${type}">[${type.toUpperCase()}]</span><span class="log-tag">${tag}</span>${msg}`;
+      body.appendChild(line);
+      body.scrollTop = body.scrollHeight;
+    }
+    document.querySelectorAll('.key-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-key');
+        showToast(key + ' Key Pressed');
+        appendLog('adbd', 'input', 'keyevent triggered: ' + key);
+      });
+    });
+    document.querySelectorAll('.tag-filter').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tag-filter').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        const filter = tab.getAttribute('data-filter');
+        document.querySelectorAll('.log-line').forEach(l => {
+          if (filter === 'all') l.classList.remove('hidden');
+          else if (filter === 'err') l.classList.toggle('hidden', !l.classList.contains('log-type-warn') && !l.classList.contains('log-type-err'));
+          else if (filter === 'adbd') l.classList.toggle('hidden', !l.classList.contains('log-type-adbd'));
+        });
+      });
+    });
+    const btnScrcpy = document.getElementById('btnScrcpy');
+    if (btnScrcpy) btnScrcpy.addEventListener('click', () => {
+      showToast('scrcpy Launching...');
+      appendLog('adbd', 'scrcpy', 'spawn: scrcpy --turn-screen-off --stay-awake');
+    });
+    const btnTapflow = document.getElementById('btnTapflow');
+    if (btnTapflow) btnTapflow.addEventListener('click', () => {
+      showToast('tapflow Connecting...');
+      appendLog('adbd', 'tapflow', 'connecting to ws://localhost:3000/stream');
+    });
+  </script>
 </body>
 </html>
 \`\`\`
