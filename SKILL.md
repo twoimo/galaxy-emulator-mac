@@ -97,15 +97,22 @@ galaxy-emu clear                  # wipe the focused input
 galaxy-emu key HOME|BACK|POWER|ENTER|APP_SWITCH|VOL_UP|VOL_DOWN|PASTE
 ```
 
-`type` sends ASCII with `input text`. `input text` cannot type Korean or other non-ASCII text, and adb cannot set the device clipboard, so non-ASCII text needs [ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard) as the active keyboard:
+`type` sends ASCII with `input text`. `input text` cannot type Korean or other non-ASCII text, and adb cannot set the device clipboard, so non-ASCII text needs [ADBKeyBoard](https://github.com/senzhk/ADBKeyBoard) installed and enabled:
 
 ```bash
 adb install ADBKeyboard.apk
 adb shell ime enable com.android.adbkeyboard/.AdbIME
-adb shell ime set com.android.adbkeyboard/.AdbIME
 ```
 
-Without it, `type` exits with an error for non-ASCII text instead of reporting success.
+You can keep your normal keyboard as the default. `type` selects ADBKeyBoard for the one send and then always switches back to the previous keyboard. If the switch back fails, it says `RESTORE FAILED` and prints the `ime set` command to run.
+
+On Android 14, `ime enable` can fail with `Unknown input method` until the id is in `enabled_input_methods`. `galaxy-emu` does not change that setting itself. Run this once, then repeat `ime enable`:
+
+```bash
+adb shell settings put secure enabled_input_methods "$(adb shell settings get secure enabled_input_methods):com.android.adbkeyboard/.AdbIME"
+```
+
+Without ADBKeyBoard, `type` exits with an error for non-ASCII text instead of reporting success.
 On a windowed emulator with clipboard sharing on, `type "검색어" --paste` (or `GALAXY_EMU_PASTE=1`) copies the text to the Mac clipboard and sends the paste key instead. Delivery is not verified; check the field with `uidump`.
 
 `uidump` filters zero-area/off-screen nodes and de-duplicates repeats, so a web page that yields 328 raw nodes reports ~82 usable ones.
