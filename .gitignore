@@ -6,3 +6,6 @@ node_modules/
 
 # Compiled Set-of-Marks helper (build: swiftc -O scripts/som_overlay.swift -o bin/som-drawer)
 bin/som-drawer
+
+# Compiled OCR helper (build: swiftc -O scripts/ocr_overlay.swift -o bin/ocr-extract)
+bin/ocr-extract
