@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execSync, spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -37,7 +37,7 @@ const command = filteredArgs[0] || 'help';
 
 function getConnectedDevices() {
   try {
-    const out = execSync('adb devices -l', { encoding: 'utf8' });
+    const out = adbRun(null, ['devices', '-l']);
     const lines = out.trim().split('\n').slice(1);
     const devices = [];
     for (const line of lines) {
@@ -60,6 +60,7 @@ function getConnectedDevices() {
 
 function resolveSerial(explicitSerial) {
   if (explicitSerial) {
+    checkSerial(explicitSerial);
     ensureDeviceReady(explicitSerial);
     return explicitSerial;
   }
@@ -67,7 +68,7 @@ function resolveSerial(explicitSerial) {
   if (list.length === 0) {
     console.error('❌ Error: No Android device or emulator is currently connected via ADB.');
     console.error('👉 Run `galaxy-emu connect` for physical phone, or `galaxy-emu boot s24u` for an AVD.');
-    const anyOffline = execSyncSafe('adb devices').includes('offline');
+    const anyOffline = adbTry(null, ['devices']).includes('offline');
     if (anyOffline) {
       console.error('   (A device is listed as offline — try `adb reconnect offline`.)');
     }
@@ -79,19 +80,98 @@ function resolveSerial(explicitSerial) {
   return serial;
 }
 
-function execSyncSafe(cmd) {
-  try { return execSync(cmd, { encoding: 'utf8' }); } catch { return ''; }
+// Runs adb with an argument list, so no Mac shell parses the arguments.
+// `adb shell` still joins its arguments with spaces and runs them in the device
+// shell, so any value that reaches the device shell goes through shQuote.
+function adbRun(serial, args) {
+  const result = spawnSync('adb', [...(serial ? ['-s', serial] : []), ...args], { encoding: 'utf8' });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`adb exited with ${result.status}: ${(result.stderr || '').trim()}`);
+  return result.stdout;
 }
 
-function adbExec(serial, cmd) {
-  const serialFlag = serial ? `-s ${serial}` : '';
-  return execSync(`adb ${serialFlag} ${cmd}`, { encoding: 'utf8' });
+function adbTry(serial, args) {
+  try { return adbRun(serial, args); } catch { return ''; }
+}
+
+// Writes the device screen to outPath without a shell redirect.
+function screencapTo(serial, outPath) {
+  const result = spawnSync('adb', [...(serial ? ['-s', serial] : []), 'exec-out', 'screencap', '-p'], { maxBuffer: 64 * 1024 * 1024 });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`adb exited with ${result.status}: ${String(result.stderr || '').trim()}`);
+  fs.writeFileSync(outPath, result.stdout);
+}
+
+// Runs a local helper with an argument list, like adbRun.
+function runTool(cmd, args, options = {}) {
+  const result = spawnSync(cmd, args, { encoding: 'utf8', ...options });
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error(`${path.basename(cmd)} exited with ${result.status}: ${String(result.stderr || '').trim()}`);
+  return result.stdout;
+}
+
+function intArg(name, value) {
+  const text = String(value);
+  if (!/^\d+$/.test(text)) throw new Error(`${name} must be a non-negative integer, got ${JSON.stringify(text)}`);
+  return text;
+}
+
+// adb serials and endpoints: emulator-5554, R5CT..., 100.64.0.1:5555, [fd7a::1]:5555, <MagicDNS name>:5555
+function checkSerial(value) {
+  if (hasControlChars(value) || !/^[A-Za-z0-9._:%\[\]-]+$/.test(String(value))) {
+    console.error(`❌ Invalid device serial or endpoint: ${JSON.stringify(String(value))}`);
+    process.exit(1);
+  }
+  return value;
+}
+
+function shQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function hasControlChars(value) {
+  return /[\x00-\x1f\x7f]/.test(String(value));
+}
+
+function tapAt(serial, x, y) {
+  const xs = String(x);
+  const ys = String(y);
+  if (!/^\d+$/.test(xs) || !/^\d+$/.test(ys)) throw new Error(`tap coordinates must be non-negative integers, got (${xs}, ${ys})`);
+  adbRun(serial, ['shell', 'input', 'tap', xs, ys]);
+}
+
+// ASCII goes through `input text`. Anything else is pasted from the Mac clipboard.
+// There is no fallback: `input text` cannot type non-ASCII characters.
+function typeText(serial, text) {
+  if (hasControlChars(text)) {
+    throw new Error('type does not accept control characters such as newlines. Use `galaxy-emu key ENTER` between lines.');
+  }
+  if (/[^\x00-\x7F]/.test(text)) {
+    const copied = spawnSync('pbcopy', [], { input: text });
+    if (copied.error || copied.status !== 0) {
+      throw new Error(`pbcopy failed (${copied.error ? copied.error.message : `exit ${copied.status}`}), so nothing was typed`);
+    }
+    adbRun(serial, ['shell', 'input', 'keyevent', '279']);
+    return 'clipboard';
+  }
+  adbRun(serial, ['shell', 'input', 'text', shQuote(text.replace(/ /g, '%s'))]);
+  return 'ascii';
+}
+
+function startTarget(serial, target) {
+  if (hasControlChars(target)) throw new Error('app start does not accept control characters in the target');
+  if (/^https?:\/\//.test(target)) {
+    adbRun(serial, ['shell', 'am', 'start', '-a', 'android.intent.action.VIEW', '-d', shQuote(target)]);
+    return 'url';
+  }
+  adbRun(serial, ['shell', 'am', 'start', '-n', shQuote(target)]);
+  return 'component';
 }
 
 // ---------- Device readiness ----------
 function deviceState(serial) {
   try {
-    const out = execSync('adb devices', { encoding: 'utf8' });
+    const out = adbRun(null, ['devices']);
     for (const line of out.split('\n').slice(1)) {
       const parts = line.trim().split(/\s+/);
       if (parts[0] === serial) return parts[1] || 'unknown';
@@ -106,8 +186,8 @@ function ensureDeviceReady(serial, attempts = 2) {
   let state = deviceState(serial);
   for (let i = 0; i < attempts && state === 'offline'; i++) {
     console.log(`🔄 ${serial} is offline — reconnecting (${i + 1}/${attempts})...`);
-    try { execSync('adb reconnect offline', { stdio: 'ignore' }); } catch {}
-    try { execSync('adb reconnect', { stdio: 'ignore' }); } catch {}
+    adbTry(null, ['reconnect', 'offline']);
+    adbTry(null, ['reconnect']);
     spawnSync('sleep', ['2']);
     state = deviceState(serial);
   }
@@ -131,8 +211,8 @@ function ensureDeviceReady(serial, attempts = 2) {
 }
 
 // ---------- Failure detection ----------
-function sh(serial, cmd) {
-  try { return adbExec(serial, cmd); } catch { return ''; }
+function sh(serial, args) {
+  return adbTry(serial, args);
 }
 
 function diagnoseDevice(serial) {
@@ -147,16 +227,16 @@ function diagnoseDevice(serial) {
   }
 
   // 2. screen / lock
-  const power = sh(serial, 'shell dumpsys power');
+  const power = sh(serial, ['shell', 'dumpsys', 'power']);
   const wake = (power.match(/mWakefulness=(\w+)/) || [])[1] || 'unknown';
   if (wake !== 'Awake') add('screen_off', 'warn', `Screen is ${wake}`, 'galaxy-emu key WAKEUP');
-  const windowDump = sh(serial, 'shell dumpsys window');
+  const windowDump = sh(serial, ['shell', 'dumpsys', 'window']);
   if (/isKeyguardShowing=true|mDreamingLockscreen=true|KeyguardShowing=true/.test(windowDump)) {
     add('locked', 'error', 'Keyguard is showing (device locked)', 'unlock manually — PIN/biometric cannot be automated');
   }
 
   // 3. foreground window classification
-  const focus = ((sh(serial, "shell dumpsys window | grep mCurrentFocus").match(/mCurrentFocus=Window\{[^}]*?(\S+)\/(\S+)\}/) || []).slice(1).join('/')) || '';
+  const focus = ((windowDump.match(/mCurrentFocus=Window\{[^}]*?(\S+)\/(\S+)\}/) || []).slice(1).join('/')) || '';
   // Real window titles on Android 14: "Application Error: <pkg>" and "Application Not Responding: <pkg>"
   const dialogMatch = windowDump.match(/Window\{[^}]*?\b(Application\s*Error|Application\s*Not\s*Responding|AppErrorDialog|AnrDialog|AppNotResponding)\b[^}]*\}/i)
     || focus.match(/(Application\s*Error|Application\s*Not\s*Responding)/i);
@@ -172,7 +252,7 @@ function diagnoseDevice(serial) {
   }
 
   // 4. recent fatal logs
-  const logs = sh(serial, 'shell logcat -d -t 600');
+  const logs = sh(serial, ['shell', 'logcat', '-d', '-t', '600']);
   if (/FATAL EXCEPTION/.test(logs)) {
     const m = logs.split('\n').filter(l => /FATAL EXCEPTION|Process:/.test(l)).slice(-2).join(' | ');
     add('app_crash', 'error', `Recent crash in logcat: ${m.slice(0, 160)}`, 'relaunch the app; report to the user');
@@ -182,11 +262,11 @@ function diagnoseDevice(serial) {
   }
 
   // 5. keyboard overlay
-  const ime = sh(serial, 'shell dumpsys input_method');
+  const ime = sh(serial, ['shell', 'dumpsys', 'input_method']);
   if (/mInputShown=true/.test(ime)) add('keyboard_shown', 'info', 'Soft keyboard is visible (it can cover targets)', 'galaxy-emu key BACK to hide');
 
   // 6. storage
-  const df = sh(serial, 'shell df /data');
+  const df = sh(serial, ['shell', 'df', '/data']);
   const m = df.match(/(\d+)%\s+\/data/);
   if (m && parseInt(m[1], 10) >= 90) add('storage_low', 'error', `Data partition ${m[1]}% full`, 'clear app data or use a larger AVD partition');
 
@@ -197,7 +277,7 @@ function fixIssues(serial, issues) {
   const done = [];
   for (const issue of issues) {
     if (issue.id === 'screen_off') {
-      adbExec(serial, 'shell input keyevent 224'); // WAKEUP
+      adbRun(serial, ['shell', 'input', 'keyevent', '224']); // WAKEUP
       done.push('woke the screen');
     } else if (issue.id === 'crash_or_anr_dialog') {
       const elements = fetchUiHierarchy(serial);
@@ -211,13 +291,13 @@ function fixIssues(serial, issues) {
         if (hit) { tapped = hit; break; }
       }
       if (tapped) {
-        adbExec(serial, `shell input tap ${tapped.center[0]} ${tapped.center[1]}`);
+        tapAt(serial, tapped.center[0], tapped.center[1]);
         done.push(`dismissed crash/ANR dialog via "${tapped.text || tapped.desc}"`);
       } else {
         done.push('crash/ANR dialog found but no dismiss button matched (inspect with uidump)');
       }
     } else if (issue.id === 'keyboard_shown') {
-      adbExec(serial, 'shell input keyevent 4'); // BACK
+      adbRun(serial, ['shell', 'input', 'keyevent', '4']); // BACK
       done.push('hid the soft keyboard');
     }
   }
@@ -256,7 +336,7 @@ function maybeRecord(serial, action, args, elementLabel) {
   let focus = '';
   let hash = '';
   try {
-    focus = (adbExec(serial, "shell dumpsys window | grep mCurrentFocus")
+    focus = (adbRun(serial, ['shell', 'dumpsys', 'window'])
       .match(/mCurrentFocus=Window\{[^}]*?(\S+\/\S+)\}/) || [])[1] || '';
     hash = computeStateHash(fetchUiHierarchy(serial));
   } catch {}
@@ -343,14 +423,14 @@ function recordState(serial, hash, elementCount) {
 
 // ---------- OCR fallback (Vision, on-device) ----------
 function runOcr(serial, pngPath) {
-  const out = execSync(`"${OCR_BIN}" "${pngPath}" --json`, { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  const out = runTool(OCR_BIN, [pngPath, '--json'], { maxBuffer: 32 * 1024 * 1024 });
   return JSON.parse(out);
 }
 
 function fetchUiHierarchy(serial) {
   const tempPath = '/data/local/tmp/uidump.xml';
-  adbExec(serial, `shell uiautomator dump ${tempPath}`);
-  const xml = adbExec(serial, `shell cat ${tempPath}`);
+  adbRun(serial, ['shell', 'uiautomator', 'dump', tempPath]);
+  const xml = adbRun(serial, ['shell', 'cat', tempPath]);
   
   const nodeTagRegex = /<node\s+([^>]+)>/g;
   let elements = [];
@@ -474,7 +554,7 @@ switch (command) {
     if (!targetEndpoint) {
       console.log('🔍 Looking for active Android devices in Tailnet...');
       try {
-        const tsOut = execSync('tailscale status 2>/dev/null', { encoding: 'utf8' });
+        const tsOut = runTool('tailscale', ['status']);
         for (const line of tsOut.split('\n')) {
           if (line.includes('android') && (line.includes('active') || line.includes('idle'))) {
             const ip = line.trim().split(/\s+/)[0];
@@ -500,9 +580,10 @@ switch (command) {
       process.exit(1);
     }
 
+    checkSerial(targetEndpoint);
     console.log(`🔌 Connecting to ${targetEndpoint}...`);
     try {
-      const res = execSync(`adb connect ${targetEndpoint}`, { encoding: 'utf8' }).trim();
+      const res = adbRun(null, ['connect', targetEndpoint]).trim();
       console.log(res);
     } catch (e) {
       console.error('❌ Failed to connect:', e.message);
@@ -514,10 +595,11 @@ switch (command) {
   case 'disconnect': {
     const serial = targetSerial || filteredArgs[1];
     if (!serial) {
-      execSync('adb disconnect');
+      adbRun(null, ['disconnect']);
       console.log('🔌 Disconnected all wireless ADB connections.');
     } else {
-      execSync(`adb disconnect ${serial}`);
+      checkSerial(serial);
+      adbRun(null, ['disconnect', serial]);
       console.log(`🔌 Disconnected ${serial}.`);
     }
     break;
@@ -526,7 +608,7 @@ switch (command) {
   case 'screenshot': {
     const serial = resolveSerial(targetSerial);
     const outPath = filteredArgs[1] || path.join(process.cwd(), `screenshot-${serial.replace(/[:.]/g, '_')}.png`);
-    execSync(`adb -s "${serial}" exec-out screencap -p > "${outPath}"`);
+    screencapTo(serial, outPath);
     console.log(`✅ Screenshot saved from ${serial} -> ${outPath} (${fs.statSync(outPath).size} bytes)`);
     break;
   }
@@ -538,12 +620,12 @@ switch (command) {
     const jsonPath = `/tmp/som-elements-${serial.replace(/[:.]/g, '_')}.json`;
 
     console.log(`🎨 Generating Set-of-Marks (SoM) labeled overlay for ${serial}...`);
-    execSync(`adb -s "${serial}" exec-out screencap -p > "${rawPng}"`);
+    screencapTo(serial, rawPng);
     const elements = fetchUiHierarchy(serial);
     fs.writeFileSync(jsonPath, JSON.stringify({ serial, elements }), 'utf8');
 
     try {
-      execSync(`"${SOM_BIN}" "${rawPng}" "${jsonPath}" "${outPath}"`, { stdio: 'inherit' });
+      runTool(SOM_BIN, [rawPng, jsonPath, outPath], { stdio: 'inherit' });
       console.log(`🖼️ Set-of-Marks image ready: ${outPath}`);
     } catch (e) {
       console.error('❌ Failed to draw SoM overlay:', e.message);
@@ -602,7 +684,7 @@ switch (command) {
       if (found) {
         console.log(`🎯 Found matching element: [${found.index}] "${found.text || found.desc}" at Center: (${found.center[0]}, ${found.center[1]})`);
         if (shouldTap) {
-          adbExec(serial, `shell input tap ${found.center[0]} ${found.center[1]}`);
+          tapAt(serial, found.center[0], found.center[1]);
           console.log(`👆 Automatically tapped (${found.center[0]}, ${found.center[1]})`);
           maybeRecord(serial, 'tap', { center: found.center }, found.text || found.desc || found.id);
         }
@@ -611,7 +693,7 @@ switch (command) {
 
       if (scroll < maxScrolls) {
         console.log(`📜 Element not visible on current screen. Scrolling down (${scroll + 1}/${maxScrolls})...`);
-        adbExec(serial, 'shell input swipe 720 2200 720 800 350');
+        adbRun(serial, ['shell', 'input', 'swipe', '720', '2200', '720', '800', '350']);
         spawnSync('sleep', ['1.2']);
       }
     }
@@ -625,9 +707,8 @@ switch (command) {
     const serial = resolveSerial(targetSerial);
     console.log(`🧹 Clearing focused text input on ${serial}...`);
     // Move to end and delete 50 times
-    adbExec(serial, 'shell input keyevent 123'); // KEYCODE_MOVE_END
-    const delKeys = Array(45).fill('67').join(' '); // KEYCODE_DEL
-    adbExec(serial, `shell input keyevent ${delKeys}`);
+    adbRun(serial, ['shell', 'input', 'keyevent', '123']); // KEYCODE_MOVE_END
+    adbRun(serial, ['shell', 'input', 'keyevent', ...Array(45).fill('67')]); // KEYCODE_DEL
     console.log('✅ Input cleared.');
     break;
   }
@@ -635,7 +716,9 @@ switch (command) {
   case 'notifications': {
     const serial = resolveSerial(targetSerial);
     try {
-      const dump = adbExec(serial, 'shell dumpsys notification --noredact 2>/dev/null || adb shell dumpsys notification');
+      let dump;
+      try { dump = adbRun(serial, ['shell', 'dumpsys', 'notification', '--noredact']); }
+      catch { dump = adbRun(serial, ['shell', 'dumpsys', 'notification']); }
       const lines = dump.split('\n');
       const notifs = [];
       let current = null;
@@ -707,7 +790,7 @@ switch (command) {
     const shouldTap = filteredArgs.includes('--tap');
     const png = `/tmp/ocr-${serial.replace(/[:.]/g, '_')}.png`;
 
-    execSync(`adb -s "${serial}" exec-out screencap -p > "${png}"`);
+    screencapTo(serial, png);
     const result = runOcr(serial, png);
     const lines = result.elements || [];
 
@@ -721,7 +804,7 @@ switch (command) {
       const [cx, cy] = hit.center;
       console.log(`🎯 OCR match: "${hit.text}" at (${cx}, ${cy}) confidence ${Math.round(hit.confidence * 100)}%`);
       if (shouldTap) {
-        adbExec(serial, `shell input tap ${cx} ${cy}`);
+        tapAt(serial, cx, cy);
         console.log(`👆 Tapped (${cx}, ${cy}) on ${serial}`);
       }
       break;
@@ -801,7 +884,7 @@ switch (command) {
     }
 
     const basePath = `/tmp/toast-base-${tag}.png`;
-    execSync(`adb -s "${serial}" exec-out screencap -p > "${basePath}"`);
+    screencapTo(serial, basePath);
     const baseHash = md5File(basePath);
 
     console.log(`👀 Watching for transient UI (toast / snackbar / heads-up) for ${watchSec}s @250ms...`);
@@ -813,7 +896,7 @@ switch (command) {
     for (let i = 0; i < frames; i++) {
       const fp = `/tmp/toast-${tag}-${i}.png`;
       const t0 = Date.now();
-      try { execSync(`adb -s "${serial}" exec-out screencap -p > "${fp}"`); } catch { continue; }
+      try { screencapTo(serial, fp); } catch { continue; }
       const h = md5File(fp);
       if (!h) continue;
       lastHash = h; lastPath = fp;
@@ -964,23 +1047,15 @@ switch (command) {
         try {
           if (st.action === 'tap') {
             const pt = resolved ? resolved.center : a.center;
-            adbExec(serial, `shell input tap ${pt[0]} ${pt[1]}`);
+            tapAt(serial, pt[0], pt[1]);
           } else if (st.action === 'type') {
-            const hasUnicode = /[^\x00-\x7F]/.test(a.text || '');
-            if (hasUnicode) {
-              execSync(`echo -n "${String(a.text).replace(/"/g, '\\"')}" | pbcopy`);
-              adbExec(serial, 'shell input keyevent 279');
-            } else {
-              const enc = String(a.text).replace(/[ %()<>|&;*\\"`$#~]/g, c => (c === ' ' ? '%s' : `\\${c}`));
-              adbExec(serial, `shell input text "${enc}"`);
-            }
+            typeText(serial, String(a.text || ''));
           } else if (st.action === 'key') {
-            adbExec(serial, `shell input keyevent ${a.code}`);
+            adbRun(serial, ['shell', 'input', 'keyevent', intArg('key code', a.code)]);
           } else if (st.action === 'swipe') {
-            adbExec(serial, `shell input swipe ${a.x1} ${a.y1} ${a.x2} ${a.y2} ${a.duration || 300}`);
+            adbRun(serial, ['shell', 'input', 'swipe', ...[a.x1, a.y1, a.x2, a.y2, a.duration || 300].map(v => intArg('swipe value', v))]);
           } else if (st.action === 'app start') {
-            if (String(a.target).startsWith('http')) adbExec(serial, `shell am start -a android.intent.action.VIEW -d "${a.target}"`);
-            else adbExec(serial, `shell am start -n "${a.target}"`);
+            startTarget(serial, String(a.target));
           } else {
             console.log(`   ⏭ step ${st.n}: unsupported action "${st.action}" — skipped`);
             continue;
@@ -1057,8 +1132,8 @@ switch (command) {
       process.exit(1);
     }
 
-    if (arg1 && arg2 && !isNaN(parseInt(arg1, 10)) && !isNaN(parseInt(arg2, 10))) {
-      adbExec(serial, `shell input tap ${arg1} ${arg2}`);
+    if (arg1 && arg2 && /^\d+$/.test(arg1) && /^\d+$/.test(arg2)) {
+      tapAt(serial, arg1, arg2);
       console.log(`👆 Tapped coordinates (${arg1}, ${arg2}) on ${serial}`);
       maybeRecord(serial, 'tap', { center: [Number(arg1), Number(arg2)] }, null);
       break;
@@ -1084,7 +1159,7 @@ switch (command) {
         process.exit(1);
       }
       const [cx, cy] = match.center;
-      adbExec(serial, `shell input tap ${cx} ${cy}`);
+      tapAt(serial, cx, cy);
       const label = match.text || match.desc || match.id || `Index ${targetIdx}`;
       console.log(`👆 Smart Tapped [${targetIdx}] ${label} at (${cx}, ${cy}) on ${serial}`);
       maybeRecord(serial, 'tap', { center: [cx, cy] }, label);
@@ -1104,7 +1179,7 @@ switch (command) {
     }
 
     const [cx, cy] = match.center;
-    adbExec(serial, `shell input tap ${cx} ${cy}`);
+    tapAt(serial, cx, cy);
     const foundLabel = match.text || match.desc || match.id;
     console.log(`👆 Smart Tapped "${foundLabel}" at (${cx}, ${cy}) on ${serial}`);
     maybeRecord(serial, 'tap', { center: [cx, cy] }, foundLabel);
@@ -1114,41 +1189,37 @@ switch (command) {
   case 'swipe': {
     const serial = resolveSerial(targetSerial);
     const [, x1, y1, x2, y2, dur = '300'] = filteredArgs;
-    if (!x1 || !y1 || !x2 || !y2) {
-      console.error('❌ Usage: galaxy-emu swipe <x1> <y1> <x2> <y2> [duration_ms] [-s serial]');
+    if (![x1, y1, x2, y2, dur].every(v => /^\d+$/.test(String(v)))) {
+      console.error('❌ Usage: galaxy-emu swipe <x1> <y1> <x2> <y2> [duration_ms] [-s serial] (non-negative integers)');
       process.exit(1);
     }
-    adbExec(serial, `shell input swipe ${x1} ${y1} ${x2} ${y2} ${dur}`);
+    adbRun(serial, ['shell', 'input', 'swipe', x1, y1, x2, y2, dur]);
     console.log(`👉 Swiped from (${x1}, ${y1}) to (${x2}, ${y2}) on ${serial}`);
     maybeRecord(serial, 'swipe', { x1: Number(x1), y1: Number(y1), x2: Number(x2), y2: Number(y2), duration: Number(dur) }, null);
     break;
   }
 
   case 'type': {
-    const serial = resolveSerial(targetSerial);
     const text = filteredArgs[1];
     if (text === undefined) {
       console.error('❌ Usage: galaxy-emu type "<text>" [-s serial]');
       process.exit(1);
     }
-
-    const hasUnicode = /[^\x00-\x7F]/.test(text);
-    if (hasUnicode) {
-      try {
-        execSync(`echo -n "${text.replace(/"/g, '\\"')}" | pbcopy`);
-        adbExec(serial, 'shell input keyevent 279');
-        console.log(`⌨️ [Unicode/Korean] Typed "${text}" via clipboard paste on ${serial}`);
-        maybeRecord(serial, 'type', { text }, null);
-      } catch (e) {
-        const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
-        adbExec(serial, `shell input text "${encoded}"`);
-      }
-    } else {
-      const encoded = text.replace(/[ %()<>|&;*\\"`$#~]/g, (c) => (c === ' ' ? '%s' : `\\${c}`));
-      adbExec(serial, `shell input text "${encoded}"`);
-      console.log(`⌨️ [ASCII] Typed "${text}" on ${serial}`);
-      maybeRecord(serial, 'type', { text }, null);
+    if (hasControlChars(text)) {
+      console.error('❌ type does not accept control characters such as newlines. Use `galaxy-emu key ENTER` between lines.');
+      process.exit(1);
     }
+    const serial = resolveSerial(targetSerial);
+    let mode;
+    try {
+      mode = typeText(serial, text);
+    } catch (e) {
+      console.error(`❌ ${String(e.message).split('\n')[0]}`);
+      process.exit(1);
+    }
+    if (mode === 'clipboard') console.log(`⌨️ [Unicode/Korean] Typed "${text}" via clipboard paste on ${serial}`);
+    else console.log(`⌨️ [ASCII] Typed "${text}" on ${serial}`);
+    maybeRecord(serial, 'type', { text }, null);
     break;
   }
 
@@ -1171,12 +1242,12 @@ switch (command) {
       SLEEP: 223,
       MENU: 82,
     };
-    const code = KEY_MAP[keyName] || parseInt(keyName, 10);
+    const code = KEY_MAP[keyName] || (/^\d+$/.test(String(keyName)) ? Number(keyName) : 0);
     if (!code) {
       console.error(`❌ Unknown key: ${keyName}. Supported: ${Object.keys(KEY_MAP).join(', ')}`);
       process.exit(1);
     }
-    adbExec(serial, `shell input keyevent ${code}`);
+    adbRun(serial, ['shell', 'input', 'keyevent', String(code)]);
     console.log(`⚡ Key ${keyName} (${code}) sent to ${serial}`);
     maybeRecord(serial, 'key', { code, name: keyName }, null);
     break;
@@ -1184,7 +1255,7 @@ switch (command) {
 
   case 'current': {
     const serial = resolveSerial(targetSerial);
-    const focus = adbExec(serial, "shell dumpsys window | grep -E 'mCurrentFocus|mFocusedApp'").trim();
+    const focus = adbRun(serial, ['shell', 'dumpsys', 'window']).split('\n').filter(l => /mCurrentFocus|mFocusedApp/.test(l)).join('\n').trim();
     console.log(`📍 Current Foreground on ${serial}:\n${focus}`);
     break;
   }
@@ -1197,21 +1268,26 @@ switch (command) {
         console.error('❌ Usage: galaxy-emu app start <pkg/act | URL> [-s serial]');
         process.exit(1);
       }
-      if (target.startsWith('http://') || target.startsWith('https://')) {
-        adbExec(serial, `shell am start -a android.intent.action.VIEW -d "${target}"`);
-        console.log(`🌐 Opened URL ${target} on ${serial}`);
-        maybeRecord(serial, 'app start', { target }, null);
-      } else {
-        adbExec(serial, `shell am start -n "${target}"`);
-        console.log(`🚀 Started component ${target} on ${serial}`);
-        maybeRecord(serial, 'app start', { target }, null);
+      let kind;
+      try {
+        kind = startTarget(serial, target);
+      } catch (e) {
+        console.error(`❌ ${String(e.message).split('\n')[0]}`);
+        process.exit(1);
       }
+      if (kind === 'url') console.log(`🌐 Opened URL ${target} on ${serial}`);
+      else console.log(`🚀 Started component ${target} on ${serial}`);
+      maybeRecord(serial, 'app start', { target }, null);
     } else if (sub === 'stop') {
       if (!target) {
         console.error('❌ Usage: galaxy-emu app stop <package> [-s serial]');
         process.exit(1);
       }
-      adbExec(serial, `shell am force-stop "${target}"`);
+      if (!/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/.test(target)) {
+        console.error(`❌ Not a package name: ${JSON.stringify(target)}`);
+        process.exit(1);
+      }
+      adbRun(serial, ['shell', 'am', 'force-stop', target]);
       console.log(`🛑 Force-stopped ${target} on ${serial}`);
     }
     break;
@@ -1248,7 +1324,7 @@ switch (command) {
     console.log(`📲 Detected ${onlineSerial}. Waiting for Android OS boot_completed...`);
     for (let i = 0; i < 30; i++) {
       try {
-        const booted = execSync(`adb -s ${onlineSerial} shell getprop sys.boot_completed`, { encoding: 'utf8' }).trim();
+        const booted = adbRun(onlineSerial, ['shell', 'getprop', 'sys.boot_completed']).trim();
         if (booted === '1') {
           console.log(`🎉 Emulator ${onlineSerial} is fully booted and ready for commands!`);
           process.exit(0);
@@ -1264,11 +1340,11 @@ switch (command) {
     const serial = resolveSerial(targetSerial);
     if (serial.startsWith('emulator-')) {
       console.log(`🛑 Shutting down emulator ${serial}...`);
-      adbExec(serial, 'emu kill');
+      adbRun(serial, ['emu', 'kill']);
       console.log('✅ Emulator stopped.');
     } else {
       console.log(`ℹ️ Target ${serial} is a physical device. Disconnecting ADB...`);
-      execSync(`adb disconnect ${serial}`);
+      adbRun(null, ['disconnect', serial]);
       console.log('✅ Disconnected.');
     }
     break;
