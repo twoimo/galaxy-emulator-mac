@@ -180,8 +180,15 @@ function pendingImeRestore(serial) {
   let saved;
   try { saved = fs.readFileSync(imeRestoreFile(serial), 'utf8').trim(); } catch { return ''; }
   if (IME_ID.test(saved)) return saved;
+  console.error(`⚠️ ignored an invalid keyboard restore record ${JSON.stringify(saved.slice(0, 80))} for ${serial}`);
   dropImeRestore(serial);
   return '';
+}
+
+// '' when the device keyboard cannot be read, so callers keep the record instead of guessing.
+function knownIme(serial) {
+  const ime = defaultIme(serial);
+  return IME_ID.test(ime) ? ime : '';
 }
 
 function restoreIme(serial, saved, note) {
@@ -199,7 +206,8 @@ function typeWithSwitchedIme(serial, text, saved) {
   fs.writeFileSync(imeRestoreFile(serial), saved, 'utf8');
   const set = setImeAndWait(serial, ADB_KEYBOARD_IME);
   if (set !== true) {
-    if (defaultIme(serial) !== ADB_KEYBOARD_IME) dropImeRestore(serial);
+    const now = knownIme(serial);
+    if (now && now !== ADB_KEYBOARD_IME) dropImeRestore(serial);
     throw new Error(`could not select ADBKeyBoard (${typeof set === 'string' ? set : 'default_input_method did not change'}), so nothing was typed. ` +
       `If it is not enabled (Android 14 reports "Unknown input method"), run: ${ENABLE_ADB_KEYBOARD_HINT} && adb shell ime enable ${ADB_KEYBOARD_IME}`);
   }
@@ -243,8 +251,9 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
       `Install it from https://github.com/senzhk/ADBKeyBoard and enable it: adb shell ime enable ${ADB_KEYBOARD_IME}. ` +
       'Or, on a windowed emulator with clipboard sharing on, pass --paste (or set GALAXY_EMU_PASTE=1) to paste from the Mac clipboard.');
   }
-  if (record && defaultIme(serial) === ADB_KEYBOARD_IME) restoreIme(serial, record, '. Nothing was typed');
-  else if (record) dropImeRestore(serial);
+  const now = record ? knownIme(serial) : '';
+  if (now === ADB_KEYBOARD_IME) restoreIme(serial, record, '. Nothing was typed');
+  else if (now) dropImeRestore(serial);
   adbRun(serial, ['shell', 'input', 'text', shQuote(text.replace(/ /g, '%s'))]);
   return 'ascii';
 }
