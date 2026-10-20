@@ -106,6 +106,8 @@ adb shell ime enable com.android.adbkeyboard/.AdbIME
 
 You can keep your normal keyboard as the default. `type` selects ADBKeyBoard for the one send and then always switches back to the previous keyboard. If the switch back fails, it says `RESTORE FAILED`, says whether the text was sent, and prints the `ime set` command to run. If a run is killed or fails before switching back, the next `type` on that device switches back (the saved keyboard is kept in `~/.galaxy-control/ime-restore-<serial>` until then). To keep ADBKeyBoard as the default after such a run, delete that file first.
 
+Before sending, `type` waits up to 5 seconds for ADBKeyBoard to report a started input on the focused field (`dumpsys input_method`), because ADBKeyBoard drops text it receives before that. It then reads the focused field with `uiautomator dump` and sends once more if the text is not there. If the text still does not appear, it exits with an error. If the field cannot be read (for example a password field, or a screen that never goes idle), it says delivery is NOT verified.
+
 On Android 14, `ime enable` can fail with `Unknown input method` until the id is in `enabled_input_methods`. `galaxy-emu` does not change that setting itself. Run this once, then repeat `ime enable`:
 
 ```bash
