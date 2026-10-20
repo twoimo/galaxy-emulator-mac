@@ -171,12 +171,43 @@ function sendViaAdbKeyboard(serial, text) {
   adbRun(serial, ['shell', 'am', 'broadcast', '-a', 'ADB_INPUT_B64', '--es', 'msg', Buffer.from(text, 'utf8').toString('base64')]);
 }
 
+// The keyboard to switch back to is written to disk before the switch and removed after it, so a
+// run that is killed or fails to switch back leaves a record the next `type` uses to finish the job.
+const imeRestoreFile = serial => path.join(CFG_DIR, `ime-restore-${encodeURIComponent(serial)}`);
+const dropImeRestore = serial => { try { fs.unlinkSync(imeRestoreFile(serial)); } catch {} };
+const IME_ID = /^[A-Za-z0-9_.]+\/[A-Za-z0-9_.]+$/;
+function pendingImeRestore(serial) {
+  let saved;
+  try { saved = fs.readFileSync(imeRestoreFile(serial), 'utf8').trim(); } catch { return ''; }
+  if (IME_ID.test(saved)) return saved;
+  console.error(`⚠️ ignored an invalid keyboard restore record ${JSON.stringify(saved.slice(0, 80))} for ${serial}`);
+  dropImeRestore(serial);
+  return '';
+}
+
+// '' when the device keyboard cannot be read, so callers keep the record instead of guessing.
+function knownIme(serial) {
+  const ime = defaultIme(serial);
+  return IME_ID.test(ime) ? ime : '';
+}
+
+function restoreIme(serial, saved, note) {
+  if (setImeAndWait(serial, saved) !== true) {
+    throw new Error(`RESTORE FAILED: could not switch the default keyboard back to ${saved} after selecting ADBKeyBoard. Run: adb shell ime set ${saved}${note}`);
+  }
+  dropImeRestore(serial);
+}
+
 function typeWithSwitchedIme(serial, text, saved) {
-  if (!saved || saved === 'null' || hasControlChars(saved)) {
+  if (!IME_ID.test(saved)) {
     throw new Error(`cannot read the current default keyboard (got ${JSON.stringify(saved)}), so ADBKeyBoard was not selected and nothing was typed`);
   }
+  ensureCfg();
+  fs.writeFileSync(imeRestoreFile(serial), saved, 'utf8');
   const set = setImeAndWait(serial, ADB_KEYBOARD_IME);
   if (set !== true) {
+    const now = knownIme(serial);
+    if (now && now !== ADB_KEYBOARD_IME) dropImeRestore(serial);
     throw new Error(`could not select ADBKeyBoard (${typeof set === 'string' ? set : 'default_input_method did not change'}), so nothing was typed. ` +
       `If it is not enabled (Android 14 reports "Unknown input method"), run: ${ENABLE_ADB_KEYBOARD_HINT} && adb shell ime enable ${ADB_KEYBOARD_IME}`);
   }
@@ -186,10 +217,7 @@ function typeWithSwitchedIme(serial, text, saved) {
   } catch (e) {
     sendError = e;
   } finally {
-    if (setImeAndWait(serial, saved) !== true) {
-      throw new Error(`RESTORE FAILED: could not switch the default keyboard back to ${saved} after selecting ADBKeyBoard. Run: adb shell ime set ${saved}` +
-        (sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : ''));
-    }
+    restoreIme(serial, saved, sendError ? `. The text was not sent either: ${String(sendError.message).split('\n')[0]}` : '. The text WAS sent, so do not type it again; the next type retries the switch back');
   }
   if (sendError) throw sendError;
 }
@@ -197,16 +225,18 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
   if (hasControlChars(text)) {
     throw new Error('type does not accept control characters such as newlines. Use `galaxy-emu key ENTER` between lines.');
   }
+  const record = pendingImeRestore(serial);
   if (/[^\x00-\x7F]/.test(text)) {
     const ime = defaultIme(serial);
-    if (ime === ADB_KEYBOARD_IME) {
+    const pending = ime === ADB_KEYBOARD_IME ? record : '';
+    if (ime === ADB_KEYBOARD_IME && !pending) {
       sendViaAdbKeyboard(serial, text);
       return 'adbkeyboard';
     }
     const installed = adbTry(serial, ['shell', 'pm', 'list', 'packages', ADB_KEYBOARD_PKG])
       .split('\n').some(l => l.trim() === `package:${ADB_KEYBOARD_PKG}`);
     if (installed) {
-      typeWithSwitchedIme(serial, text, ime);
+      typeWithSwitchedIme(serial, text, pending || ime);
       return 'adbkeyboard-switched';
     }
     if (paste) {
@@ -221,6 +251,9 @@ function typeText(serial, text, paste = process.env.GALAXY_EMU_PASTE === '1') {
       `Install it from https://github.com/senzhk/ADBKeyBoard and enable it: adb shell ime enable ${ADB_KEYBOARD_IME}. ` +
       'Or, on a windowed emulator with clipboard sharing on, pass --paste (or set GALAXY_EMU_PASTE=1) to paste from the Mac clipboard.');
   }
+  const now = record ? knownIme(serial) : '';
+  if (now === ADB_KEYBOARD_IME) restoreIme(serial, record, '. Nothing was typed');
+  else if (now) dropImeRestore(serial);
   adbRun(serial, ['shell', 'input', 'text', shQuote(text.replace(/ /g, '%s'))]);
   return 'ascii';
 }
